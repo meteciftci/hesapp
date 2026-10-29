@@ -5,6 +5,7 @@ import type { MeResponse } from '../shared/api'
 import { accessUser, type KeyResolver, remoteKeyResolver } from './auth/access'
 import { createAuthRoutes } from './auth/passkey'
 import { getSession, sameOrigin } from './auth/session'
+import { createBudgetRoutes } from './budget/routes'
 import { type AppBindings, authMode } from './env'
 
 export function createApp(keyResolver: KeyResolver = remoteKeyResolver) {
@@ -48,6 +49,7 @@ export function createApp(keyResolver: KeyResolver = remoteKeyResolver) {
   )
 
   app.get('/me', (c) => c.json<MeResponse>(c.get('user')))
+  app.route('/', createBudgetRoutes())
 
   app.notFound((c) => c.json({ error: 'bulunamadı' }, 404))
   app.onError((err, c) => {
