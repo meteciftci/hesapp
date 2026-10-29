@@ -285,11 +285,11 @@ Depoda kişisel değer yoktur. Gerekenler:
 | `ACCESS_AUD` | Worker gizli değişkeni | JWT doğrulama |
 | `ALLOWED_EMAILS` | Worker gizli değişkeni (isteğe bağlı) | ikinci kontrol |
 | `TZ` | Worker değişkeni | varsayılan `Europe/Istanbul` |
-| `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID` | GitHub Actions gizli değişkenleri | dağıtım |
 
-- Depodaki `wrangler.jsonc` yalnızca yer tutucu içerir; dağıtım iş akışı gerçek değerleri gizli değişkenlerden yazar.
+- Depodaki `wrangler.jsonc` yalnızca yer tutucu içerir. Alan adına özgü değerler (Access takım alanı, AUD, izinli e-postalar) Cloudflare panelinde Worker'ın "Variables and Secrets" bölümüne girilir.
 - Özel alan adı ve Access uygulaması Cloudflare panelinden tanımlanır, kodda yer almaz.
-- **GitHub Actions:** `main`'e her push'ta test → D1 şema güncellemesi → dağıtım. Pull request'lerde yalnızca test ve derleme.
+- **Dağıtım:** GitHub Actions kullanılmaz. Cloudflare'in Git bağlantısı (Workers Builds) depoyu izler; `main`'e her birleştirmede derler (`pnpm build`) ve yayınlar (`npx wrangler deploy`). Testler geliştirme sırasında yerelde/oturumda çalıştırılır, birleştirmeden önce geçmesi şarttır.
+- **D1 şema güncellemeleri (M1'den sonra):** `wrangler d1 migrations apply` Workers Builds'te dağıtım komutunun parçası olur.
 - Yerel geliştirme: `pnpm dev` (Vite + yerel D1), Access yerine `.dev.vars` ile sahte kullanıcı.
 - `pnpm seed`: uydurma örnek veri (ör. "Örnek Konut Kredisi", "Maaş A").
 
@@ -300,13 +300,13 @@ README'de adım adım: depoyu çatallama, D1 oluşturma, Access uygulaması ve i
 - **Birim:** kayıt üretimi, ay sonu günü düzeltmesi, kapsamlı düzenleme, ödeme planı ayrıştırma, kapanış/yeniden açma, devir zinciri, para biçimlendirme ve ayrıştırma.
 - **API:** Workers test havuzunda gerçek D1 benzetimiyle uç noktalar ve JWT doğrulama.
 - **Yedek döngüsü:** dışa aktar → boş veritabanına içe aktar → aynı sonuç.
-- CI'da her pull request'te çalışır.
+- Her pull request'ten önce çalıştırılır (`pnpm test`, `pnpm typecheck`, `pnpm build`).
 
 ## 12. Geliştirme sırası
 
 | Adım | İçerik | Bitti sayılması için |
 |---|---|---|
-| M0 | Proje iskeleti, CI, dağıtım, Access doğrulama | Boş uygulama alan adında, girişle açılıyor |
+| M0 | Proje iskeleti, commit denetimi, dağıtım yapılandırması, Access doğrulama | Boş uygulama alan adında, Access girişiyle açılıyor (Cloudflare kurulumu sonrası) |
 | M1 | Şema, migration, alan mantığı, API | Bölüm 6'nın testleri geçiyor |
 | M2 | Ay ekranı, ekle/düzenle/sil, ödendi, tema | Telefonda bir ay baştan sona yönetilebiliyor |
 | M3 | Planlar, plan detayı, yaklaşan | Kredi tanımlanıp taksitleri izlenebiliyor |
@@ -340,11 +340,11 @@ Her adım ayrı bir pull request olarak gelir.
 | `test` | test ekleme veya düzeltme |
 | `style` | biçim, boşluk (davranış değişmez) |
 | `perf` | performans |
-| `ci` | GitHub Actions, dağıtım |
+| `ci` | derleme ve dağıtım yapılandırması |
 | `chore` | bağımlılık, yapılandırma, diğer |
 
 Geriye uyumsuz değişiklikte tür sonrasına `!` eklenir: `feat!: yedek biçimini 2. sürüme geçir`.
 
 - Dal adları: `<tür>/<kısa-ad>`, ör. `feat/ay-kapanisi`.
 - Pull request başlıkları da aynı biçimdedir; birleştirme "squash" ile yapılır, böylece `main`'de her PR tek bir kurala uygun commit olur.
-- M0'da commitlint eklenir; kurala uymayan commit ve PR başlıkları CI'da reddedilir.
+- Commit mesajları yerel bir git hook'u (husky + commitlint) ile denetlenir; kurala uymayan commit oluşmaz. Pull request başlıkları aynı kuralla elle yazılır.
