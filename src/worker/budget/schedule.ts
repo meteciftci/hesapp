@@ -1,4 +1,5 @@
-import { addMonths, compareMonth, dueDateFor } from '../../shared/month'
+import { addMonths, compareMonth } from '../../shared/month'
+import { dueDateInPeriod } from '../../shared/period'
 
 /** Tekrarlayan planlar için bugünden itibaren kaç ay ileriye kayıt üretilir. */
 export const RECURRING_HORIZON_MONTHS = 12
@@ -23,13 +24,14 @@ export interface PlannedEntry {
 
 /**
  * Bir planın üretmesi gereken tüm kayıtlar.
+ * `startDay`: bütçe döneminin başladığı gün (vade bu döneme göre hesaplanır).
  * Taksitli: `through` yok sayılır, tüm taksitler. Tekrarlayan: başlangıçtan `through`'a (ve varsa bitişe) kadar.
  */
-export function scheduleFor(plan: PlanSchedule, through: string): PlannedEntry[] {
+export function scheduleFor(plan: PlanSchedule, through: string, startDay = 1): PlannedEntry[] {
   const make = (month: string, installmentNo: number | null): PlannedEntry => ({
     month,
     installmentNo,
-    dueDate: dueDateFor(month, plan.dayOfMonth),
+    dueDate: dueDateInPeriod(month, plan.dayOfMonth, startDay),
     plannedAmount: plan.amount,
     isEstimate: plan.variable,
   })

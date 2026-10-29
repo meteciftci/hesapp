@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getPlatformProxy, type PlatformProxy, unstable_splitSqlQuery } from 'wrangler'
-import type { EntryDto, MonthDto, PlanDto, UpcomingDto, YearDto } from '../../shared/api'
+import type { EntryDto, MonthDto, PlanDto, SettingsDto, SettingsUpdateResult, UpcomingDto, YearDto } from '../../shared/api'
 import { createApp } from '../app'
 import type { Env } from '../env'
 
@@ -57,7 +57,7 @@ beforeAll(async () => {
 }, 60_000)
 
 beforeEach(async () => {
-  await env.DB.batch(['audit_log', 'entries', 'plans', 'months'].map((t) => env.DB.prepare(`DELETE FROM ${t}`)))
+  await env.DB.batch(['audit_log', 'entries', 'plans', 'months', 'settings'].map((t) => env.DB.prepare(`DELETE FROM ${t}`)))
   // Sabit "bugün": 5 Kasım 2026 (İstanbul)
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(new Date('2026-11-05T09:00:00Z'))
@@ -405,5 +405,111 @@ describe('değişiklik geçmişi ve doğrulama', () => {
     const passkeyEnv = { ...env, AUTH_MODE: 'passkey', SITE_URL: origin, DEV_USER_EMAIL: undefined }
     expect((await call('GET', '/api/months/2026-11', undefined, passkeyEnv)).status).toBe(401)
     expect((await call('GET', '/api/plans', undefined, passkeyEnv)).status).toBe(401)
+  })
+})
+
+describe('dönem başlangıç günü', () => {
+  const put = (day: number) => call<SettingsUpdateResult>('PUT', '/api/settings', { periodStartDay: day })
+
+  it('varsayılan 1 (takvim ayı); geçersiz değerler reddedilir', async () => {
+    expect((await get<SettingsDto>('/api/settings')).body).toEqual({ periodStartDay: 1 })
+    expect(await monthOf('2026-10')).toMatchObject({ start: '2026-10-01', end: '2026-10-31' })
+    for (const bad of [0, 29, 15.5, '15', null]) expect((await call('PUT', '/api/settings', { periodStartDay: bad })).status).toBe(400)
+    expect((await call('PUT', '/api/settings', { periodStartDay: 15, baska: 1 })).status).toBe(400)
+  })
+
+  it('başlangıç 15: dönem aralığı ve plan vadeleri döneme göre üretilir', async () => {
+    expect((await put(15)).body).toMatchObject({ periodStartDay: 15, recalculated: 0 })
+    expect(await monthOf('2026-10')).toMatchObject({ start: '2026-10-15', end: '2026-11-14' })
+
+    const big = await newPlan({ direction: 'expense', kind: 'installment', name: 'Gün 24', amount: 100, dayOfMonth: 24, startMonth: '2026-10', installmentCount: 3 })
+    const small = await newPlan({ direction: 'income', kind: 'installment', name: 'Gün 5', amount: 100, dayOfMonth: 5, startMonth: '2026-10', installmentCount: 3 })
+    const dues = async (id: string) => (await get<{ entries: EntryDto[] }>(`/api/plans/${id}`)).body.entries.map((e) => [e.month, e.dueDate])
+    expect(await dues(big.plan.id)).toEqual([['2026-10', '2026-10-24'], ['2026-11', '2026-11-24'], ['2026-12', '2026-12-24']])
+    expect(await dues(small.plan.id)).toEqual([['2026-10', '2026-11-05'], ['2026-11', '2026-12-05'], ['2026-12', '2027-01-05']])
+    // dönem içindeki kayıtlar vade sırasıyla gelir
+    expect((await monthOf('2026-10')).entries.map((e) => e.name)).toEqual(['Gün 24', 'Gün 5'])
+  })
+
+  it('"bugün" döneme göre bulunur: 5 Kasım, başlangıç 15 iken hâlâ Ekim dönemindedir', async () => {
+    await put(15)
+    await call('PUT', '/api/months/2026-10/opening', { balance: 0 })
+    expect((await post('/api/months/2026-11/close', { bankBalance: 0 })).status).toBe(409) // gelecek dönem
+    expect((await post('/api/months/2026-10/close', { bankBalance: 0 })).status).toBe(200)
+  })
+
+  it('kapanış farkı kaydının vadesi dönemin son günüdür', async () => {
+    await put(15)
+    await call('PUT', '/api/months/2026-10/opening', { balance: 0 })
+    await newEntry('2026-10', 'expense', 'Gider', 100, '2026-10-20')
+    const closed = await post<MonthDto>('/api/months/2026-10/close', { bankBalance: -TRY(150) })
+    expect(closed.body.entries.find((e) => e.type === 'reconciliation')).toMatchObject({ dueDate: '2026-11-14', amount: TRY(50) })
+  })
+
+  it('kayıt vadesi dönemin içinde olmalı', async () => {
+    await put(15)
+    expect((await post('/api/entries', { month: '2026-10', direction: 'expense', name: 'İçeride', plannedAmount: 1, dueDate: '2026-11-14' })).status).toBe(201)
+    expect((await post('/api/entries', { month: '2026-10', direction: 'expense', name: 'Dışarıda', plannedAmount: 1, dueDate: '2026-11-15' })).status).toBe(400)
+    expect((await post('/api/entries', { month: '2026-10', direction: 'expense', name: 'Dışarıda', plannedAmount: 1, dueDate: '2026-10-14' })).status).toBe(400)
+    const e = await newEntry('2026-10', 'expense', 'Düzenlenecek', 10, '2026-10-20')
+    const bad = await patch<{ error: string }>(`/api/entries/${e.id}`, { dueDate: '2026-11-20' })
+    expect(bad.status).toBe(400)
+    expect(bad.body.error).toContain('2026-10-15')
+    expect((await patch(`/api/entries/${e.id}`, { dueDate: '2026-11-10' })).status).toBe(200)
+  })
+
+  it('bu ve sonraki kayıtlarda vade günü değişince vadeler dönem kuralına göre kayar', async () => {
+    await put(15)
+    await newPlan({ direction: 'expense', kind: 'recurring', name: 'Kira', amount: 100, dayOfMonth: 24, startMonth: '2026-10' })
+    const nov = (await monthOf('2026-11')).entries[0]!
+    expect(nov.dueDate).toBe('2026-11-24')
+    await patch(`/api/entries/${nov.id}`, { dueDate: '2026-12-03', scope: 'following' }) // gün 3 < 15 → ertesi ay
+    expect((await monthOf('2026-11')).entries[0]!.dueDate).toBe('2026-12-03')
+    expect((await monthOf('2026-12')).entries[0]!.dueDate).toBe('2027-01-03')
+    expect((await monthOf('2026-10')).entries[0]!.dueDate).toBe('2026-10-24') // öncesi değişmedi
+  })
+
+  it('yaklaşan ekranı vade tarihine göre çalışır', async () => {
+    await put(15)
+    await newPlan({ direction: 'income', kind: 'recurring', name: 'Maaş', amount: 100, dayOfMonth: 5, startMonth: '2026-10' }) // vade 2026-11-05 (bugün)
+    await newPlan({ direction: 'expense', kind: 'recurring', name: 'Kira', amount: 100, dayOfMonth: 24, startMonth: '2026-10' })
+    const res = await get<UpcomingDto>('/api/upcoming?days=30')
+    expect(res.body.upcoming.map((e) => [e.name, e.dueDate])).toEqual([['Maaş', '2026-11-05'], ['Kira', '2026-11-24'], ['Maaş', '2026-12-05']])
+    expect(res.body.overdue.map((e) => [e.name, e.dueDate])).toEqual([['Kira', '2026-10-24']]) // Ekim dönemi kirası vadesi geçti
+  })
+
+  it('başlangıç günü değişince elle düzenlenmemiş plan vadeleri yeniden hesaplanır; elle girilenler korunur ve bildirilir', async () => {
+    const { plan } = await newPlan({ direction: 'expense', kind: 'installment', name: 'Taksit', amount: 100, dayOfMonth: 5, startMonth: '2026-11', installmentCount: 2 })
+    const manual = await newEntry('2026-11', 'expense', 'Elle', 10, '2026-11-08')
+    const edited = (await monthOf('2026-12')).entries[0]!
+    await patch(`/api/entries/${edited.id}`, { plannedAmount: 5 }) // elle düzenlendi: günü korunur, yalnızca döneme yerleştirilir
+
+    const res = await put(15)
+    expect(res.body.recalculated).toBe(2) // Kasım taksiti (plan günü) ve elle düzenlenen Aralık taksiti (günü korundu)
+    expect(res.body.outsidePeriod).toBe(1) // tek seferlik 8 Kasım, artık Kasım döneminin (15 Kas–14 Ara) dışında
+    const detail = await get<{ entries: EntryDto[] }>(`/api/plans/${plan.id}`)
+    expect(detail.body.entries.map((e) => [e.month, e.dueDate])).toEqual([['2026-11', '2026-12-05'], ['2026-12', '2027-01-05']])
+    expect((await monthOf('2026-11')).entries.find((e) => e.id === manual.id)!.dueDate).toBe('2026-11-08')
+
+    const same = await put(15) // değişiklik yoksa hiçbir şey yeniden hesaplanmaz
+    expect(same.body).toMatchObject({ recalculated: 0, outsidePeriod: 1 })
+    const audit = await get<{ action: string; by: string; after: unknown }[]>('/api/audit?entity=settings&id=period_start_day')
+    expect(audit.body).toHaveLength(1)
+    expect(audit.body[0]).toMatchObject({ action: 'update', by: 'ornek@example.com', after: { periodStartDay: 15, recalculated: 2 } })
+  })
+
+  it('kapalı dönem varken başlangıç günü değiştirilemez', async () => {
+    await call('PUT', '/api/months/2026-11/opening', { balance: 0 })
+    await post('/api/months/2026-11/close', { bankBalance: 0 })
+    const res = await put(15)
+    expect(res.status).toBe(409)
+    expect((await get<SettingsDto>('/api/settings')).body.periodStartDay).toBe(1)
+  })
+
+  it('yıl özeti dönem aralıklarını taşır', async () => {
+    await put(15)
+    const { body } = await get<YearDto>('/api/years/2026')
+    expect(body.months[0]).toMatchObject({ month: '2026-01', start: '2026-01-15', end: '2026-02-14' })
+    expect(body.months[11]).toMatchObject({ month: '2026-12', start: '2026-12-15', end: '2027-01-14' })
   })
 })

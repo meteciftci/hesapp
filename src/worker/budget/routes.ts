@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
-import type { EntryDto, MonthDto, MonthTotals, PlanDto, UpcomingDto, YearDto } from '../../shared/api'
-import { addDays, addMonths, daysInMonth, dueDateFor, monthOf } from '../../shared/month'
-import { isMonth } from '../../shared/month'
+import type { EntryDto, MonthDto, MonthTotals, PlanDto, SettingsDto, SettingsUpdateResult, UpcomingDto, YearDto } from '../../shared/api'
+import { addDays, addMonths, isMonth } from '../../shared/month'
+import { dueDateInPeriod, isDateInPeriod, periodOf, periodRange } from '../../shared/period'
 import type { AppBindings } from '../env'
 import { closeBlocker, lastClosedMonth, openingFor, reconcile } from './balance'
 import { type Ctx, fail, monthParam, parseBody } from './http'
@@ -10,10 +10,11 @@ import {
   assertOpen,
   auditStatement,
   closedMonths,
-  currentMonthOf,
+  currentPeriodOf,
   type EntryRow,
   ENTRY_SELECT,
   ensureRecurring,
+  getStartDay,
   insertEntry,
   loadMonthRows,
   loadNets,
@@ -29,7 +30,7 @@ import {
 } from './repo'
 import { RECURRING_HORIZON_MONTHS, scheduleFor } from './schedule'
 import { scopeTargets } from './scope'
-import { entryCreate, entryPatch, monthClose, monthOpening, payBody, planClose, planCreate, schedulePaste } from './schemas'
+import { entryCreate, entryPatch, monthClose, monthOpening, payBody, planClose, planCreate, schedulePaste, settingsUpdate } from './schemas'
 
 type EntryJoin = Parameters<typeof toEntryDto>[0]
 
@@ -56,10 +57,11 @@ export function createBudgetRoutes() {
 
   // ---------------------------------------------------------------- aylar
   async function buildMonth(c: Ctx, month: string): Promise<MonthDto> {
-    const [rows, nets] = await Promise.all([loadMonthRows(c), loadNets(c)])
+    const [rows, nets, startDay] = await Promise.all([loadMonthRows(c), loadNets(c), getStartDay(c)])
     const states = rows.map(toState)
     const opening = openingFor(month, states, netOf(nets))
     const self = rows.find((r) => r.month === month)
+    const range = periodRange(month, startDay)
     const { results } = await c.env.DB.prepare(
       `${ENTRY_SELECT} WHERE e.month = ? AND e.deleted_at IS NULL ORDER BY (e.type = 'reconciliation'), (e.due_date IS NULL), e.due_date, e.name`,
     )
@@ -84,6 +86,8 @@ export function createBudgetRoutes() {
 
     return {
       month,
+      start: range.start,
+      end: range.end,
       status: self?.status ?? 'open',
       opening,
       anchor: self?.anchor_balance ?? null,
@@ -120,7 +124,8 @@ export function createBudgetRoutes() {
     const month = monthParam(c)
     const body = await parseBody(c, monthClose)
     const rows = await loadMonthRows(c)
-    const blocker = closeBlocker(month, rows.map(toState), currentMonthOf(c))
+    const startDay = await getStartDay(c)
+    const blocker = closeBlocker(month, rows.map(toState), await currentPeriodOf(c, startDay))
     if (blocker) fail(409, blocker)
     await ensureRecurring(c, month)
 
@@ -142,7 +147,7 @@ export function createBudgetRoutes() {
           `INSERT INTO entries (id, month, plan_id, installment_no, type, direction, name, planned_amount, is_estimate, due_date, paid_at, auto_pay, created_by, updated_by, created_at, updated_at)
            SELECT ?, ?, NULL, NULL, 'reconciliation', ?, ?, ?, 0, ?, ?, 0, ?, ?, ?, ?
             WHERE NOT EXISTS (SELECT 1 FROM months WHERE month = ? AND status = 'closed')`,
-        ).bind(reconId, month, diff.direction, body.name ?? 'Kayıt dışı harcamalar', diff.amount, `${month}-${String(daysInMonth(month)).padStart(2, '0')}`, now, by, by, now, now, month),
+        ).bind(reconId, month, diff.direction, body.name ?? 'Kayıt dışı harcamalar', diff.amount, periodRange(month, startDay).end, now, by, by, now, now, month),
       )
     }
     statements.push(
@@ -178,7 +183,7 @@ export function createBudgetRoutes() {
     const days = Number.isInteger(daysRaw) && daysRaw >= 1 && daysRaw <= 366 ? daysRaw : 30
     const today = todayOf(c)
     const until = addDays(today, days)
-    await ensureRecurring(c, monthOf(until))
+    await ensureRecurring(c, periodOf(until, await getStartDay(c)))
     const { results } = await c.env.DB.prepare(
       `${ENTRY_SELECT} WHERE e.deleted_at IS NULL AND e.paid_at IS NULL AND e.due_date IS NOT NULL AND e.due_date <= ?
          AND e.month NOT IN (SELECT month FROM months WHERE status = 'closed') ORDER BY e.due_date, e.name`,
@@ -198,7 +203,7 @@ export function createBudgetRoutes() {
     const year = Number(c.req.param('year'))
     if (!Number.isInteger(year) || year < 2000 || year > 2200) fail(400, 'yıl geçersiz')
     await ensureRecurring(c, `${year}-12`)
-    const [rows, nets] = await Promise.all([loadMonthRows(c), loadNets(c)])
+    const [rows, nets, startDay] = await Promise.all([loadMonthRows(c), loadNets(c), getStartDay(c)])
     const states = rows.map(toState)
     const net = netOf(nets)
     const body: YearDto = { year, months: [], totals: { income: 0, expense: 0, net: 0 } }
@@ -208,8 +213,11 @@ export function createBudgetRoutes() {
       const opening = openingFor(month, states, net)
       const row = rows.find((r) => r.month === month)
       const closed = row?.status === 'closed'
+      const range = periodRange(month, startDay)
       body.months.push({
         month,
+        start: range.start,
+        end: range.end,
         status: closed ? 'closed' : 'open',
         income: own.income,
         expense: own.expense,
@@ -237,7 +245,7 @@ export function createBudgetRoutes() {
 
   app.get('/plans', async (c) => {
     const status = c.req.query('status') ?? 'active'
-    await ensureRecurring(c, addMonths(currentMonthOf(c), RECURRING_HORIZON_MONTHS))
+    await ensureRecurring(c, addMonths(await currentPeriodOf(c), RECURRING_HORIZON_MONTHS))
     const { results } = await c.env.DB.prepare('SELECT * FROM plans WHERE deleted_at IS NULL ORDER BY created_at').all<PlanRow>()
     const stats = await planStats(c)
     const list = results.map((p) => toPlanDto(p, stats.get(p.id)))
@@ -250,7 +258,8 @@ export function createBudgetRoutes() {
     const now = Date.now()
     const by = userId(c)
     const id = crypto.randomUUID()
-    const through = addMonths(currentMonthOf(c), RECURRING_HORIZON_MONTHS)
+    const startDay = await getStartDay(c)
+    const through = addMonths(await currentPeriodOf(c, startDay), RECURRING_HORIZON_MONTHS)
     const items = scheduleFor(
       {
         kind: body.kind,
@@ -262,6 +271,7 @@ export function createBudgetRoutes() {
         variable: body.variable ?? false,
       },
       through,
+      startDay,
     )
     const closed = await closedMonths(c)
     const today = todayOf(c)
@@ -361,7 +371,7 @@ export function createBudgetRoutes() {
             name: `${plan.name} (erken kapatma)`,
             plannedAmount: body.payoffAmount,
             isEstimate: false,
-            dueDate: dueDateFor(body.fromMonth, plan.day_of_month),
+            dueDate: dueDateInPeriod(body.fromMonth, plan.day_of_month, await getStartDay(c)),
             paidAt: null,
             autoPay: false,
             note: null,
@@ -421,7 +431,8 @@ export function createBudgetRoutes() {
   app.post('/entries', async (c) => {
     const body = await parseBody(c, entryCreate)
     await assertOpen(c, body.month)
-    if (body.dueDate && monthOf(body.dueDate) !== body.month) fail(400, 'vade tarihi aynı ay içinde olmalı')
+    const startDay = await getStartDay(c)
+    if (body.dueDate && !isDateInPeriod(body.dueDate, body.month, startDay)) fail(400, `vade tarihi dönemin içinde olmalı (${periodRange(body.month, startDay).start} – ${periodRange(body.month, startDay).end})`)
     const now = Date.now()
     const id = crypto.randomUUID()
     await runBatch(c, [
@@ -456,7 +467,8 @@ export function createBudgetRoutes() {
     const scope = body.scope ?? 'this'
     if (scope !== 'this' && (body.actualAmount !== undefined || body.isEstimate !== undefined)) fail(400, 'gerçekleşen tutar ve tahmin işareti yalnızca "sadece bu kayıt" kapsamında değişir')
     if (scope !== 'this' && !entry.plan_id) fail(400, 'bu kayıt bir plana bağlı değil')
-    if (body.dueDate && monthOf(body.dueDate) !== entry.month) fail(400, 'vade tarihi aynı ay içinde olmalı')
+    const startDay = await getStartDay(c)
+    if (body.dueDate && !isDateInPeriod(body.dueDate, entry.month, startDay)) fail(400, `vade tarihi dönemin içinde olmalı (${periodRange(entry.month, startDay).start} – ${periodRange(entry.month, startDay).end})`)
 
     const now = Date.now()
     const by = userId(c)
@@ -511,7 +523,7 @@ export function createBudgetRoutes() {
         if (body.plannedAmount !== undefined) (own.push('planned_amount = ?'), ownBinds.push(body.plannedAmount))
         if (body.autoPay !== undefined) (own.push('auto_pay = ?'), ownBinds.push(Number(body.autoPay)))
         if (body.note !== undefined) (own.push('note = ?'), ownBinds.push(body.note))
-        if (newDay !== null) (own.push('due_date = ?'), ownBinds.push(dueDateFor(monthOfId.get(id) as string, newDay)))
+        if (newDay !== null) (own.push('due_date = ?'), ownBinds.push(dueDateInPeriod(monthOfId.get(id) as string, newDay, startDay)))
         own.push('overridden = 0')
         statements.push(c.env.DB.prepare(`UPDATE entries SET ${own.join(', ')}, updated_by = ?, updated_at = ? WHERE id = ?`).bind(...ownBinds, by, now, id))
       }
@@ -581,11 +593,52 @@ export function createBudgetRoutes() {
     return c.json(await entryDto(c, entry.id))
   })
 
+  // ---------------------------------------------------------------- ayarlar
+  app.get('/settings', async (c) => c.json<SettingsDto>({ periodStartDay: await getStartDay(c) }))
+
+  app.put('/settings', async (c) => {
+    const body = await parseBody(c, settingsUpdate)
+    const before = await getStartDay(c)
+    if (body.periodStartDay === before) return c.json<SettingsUpdateResult>({ periodStartDay: before, recalculated: 0, outsidePeriod: await countOutsidePeriod(c, before) })
+    // Kapalı dönem varsa geçmişin tutarlılığı için değiştirilemez.
+    if ((await closedMonths(c)).size > 0) fail(409, 'kapanmış dönem varken dönem başlangıç günü değiştirilemez')
+
+    const now = Date.now()
+    const by = userId(c)
+    // Plana bağlı kayıtlar: elle düzenlenmemişler plan gününe göre yeniden hesaplanır; elle düzenlenmişlerde
+    // kullanıcının seçtiği gün korunur, yalnızca yeni dönemin dışında kalıyorsa dönemin içine yerleştirilir.
+    // Plansız (tek seferlik) kayıtların tarihine dokunulmaz; dışarıda kalanlar `outsidePeriod` ile bildirilir.
+    const { results } = await c.env.DB.prepare(
+      `SELECT e.id, e.month, e.overridden, e.due_date, p.day_of_month FROM entries e JOIN plans p ON p.id = e.plan_id
+        WHERE e.deleted_at IS NULL AND e.type = 'normal'`,
+    ).all<{ id: string; month: string; overridden: number; due_date: string | null; day_of_month: number }>()
+    const changes: { id: string; dueDate: string }[] = []
+    for (const r of results) {
+      let next: string | null = null
+      if (!r.overridden) next = dueDateInPeriod(r.month, r.day_of_month, body.periodStartDay)
+      else if (r.due_date && !isDateInPeriod(r.due_date, r.month, body.periodStartDay)) next = dueDateInPeriod(r.month, Number(r.due_date.slice(8, 10)), body.periodStartDay)
+      if (next && next !== r.due_date) changes.push({ id: r.id, dueDate: next })
+    }
+    const statements = [
+      c.env.DB.prepare("INSERT INTO settings (key, value) VALUES ('period_start_day', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(String(body.periodStartDay)),
+      ...changes.map((r) => c.env.DB.prepare('UPDATE entries SET due_date = ?, updated_by = ?, updated_at = ? WHERE id = ?').bind(r.dueDate, by, now, r.id)),
+      auditStatement(c, 'settings', 'period_start_day', 'update', { periodStartDay: before }, { periodStartDay: body.periodStartDay, recalculated: changes.length }, now),
+    ]
+    await runBatch(c, statements)
+    return c.json<SettingsUpdateResult>({ periodStartDay: body.periodStartDay, recalculated: changes.length, outsidePeriod: await countOutsidePeriod(c, body.periodStartDay) })
+  })
+
+  /** Vadesi, kaydın kendi döneminin dışında kalan kayıt sayısı (elle girilmiş tarihler). */
+  async function countOutsidePeriod(c: Ctx, startDay: number): Promise<number> {
+    const { results } = await c.env.DB.prepare('SELECT month, due_date FROM entries WHERE deleted_at IS NULL AND due_date IS NOT NULL').all<{ month: string; due_date: string }>()
+    return results.filter((r) => !isDateInPeriod(r.due_date, r.month, startDay)).length
+  }
+
   // ---------------------------------------------------------------- geçmiş
   app.get('/audit', async (c) => {
     const entity = c.req.query('entity')
     const id = c.req.query('id')
-    if (!entity || !['plan', 'entry', 'month'].includes(entity) || !id) fail(400, 'entity ve id gerekli')
+    if (!entity || !['plan', 'entry', 'month', 'settings'].includes(entity) || !id) fail(400, 'entity ve id gerekli')
     if (entity === 'month' && !isMonth(id)) fail(400, 'ay geçersiz')
     const { results } = await c.env.DB.prepare(
       `SELECT a.id, a.action, a.before_json, a.after_json, a.at, COALESCE(u.name, a.user_id) AS by

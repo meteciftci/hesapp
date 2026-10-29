@@ -1,4 +1,5 @@
-import { addMonths, monthOf, todayIn } from '../../shared/month'
+import { addMonths, todayIn } from '../../shared/month'
+import { isStartDay, periodOf } from '../../shared/period'
 import type { EntryDto, PlanDto } from '../../shared/api'
 import type { Ctx } from './http'
 import { fail } from './http'
@@ -70,7 +71,18 @@ const MAX_MONTHS_AHEAD = 60
 
 export const userId = (c: Ctx) => c.get('user').id
 export const todayOf = (c: Ctx) => todayIn(c.env.TZ)
-export const currentMonthOf = (c: Ctx) => monthOf(todayOf(c))
+
+/** Hane ayarı: bütçe döneminin başladığı gün (varsayılan 1 = takvim ayı). */
+export async function getStartDay(c: Ctx): Promise<number> {
+  const row = await c.env.DB.prepare("SELECT value FROM settings WHERE key = 'period_start_day'").first<{ value: string }>()
+  const n = Number(row?.value)
+  return isStartDay(n) ? n : 1
+}
+
+/** Bugünün içinde bulunduğu dönemin etiketi. */
+export async function currentPeriodOf(c: Ctx, startDay?: number): Promise<string> {
+  return periodOf(todayOf(c), startDay ?? (await getStartDay(c)))
+}
 
 export const effective = (e: { planned_amount: number; actual_amount: number | null }) => e.actual_amount ?? e.planned_amount
 
@@ -207,7 +219,7 @@ export function insertEntry(c: Ctx, e: NewEntry, now: number, ignoreConflict = f
   )
 }
 
-export function auditStatement(c: Ctx, entity: 'plan' | 'entry' | 'month', entityId: string, action: string, before: unknown, after: unknown, now: number) {
+export function auditStatement(c: Ctx, entity: 'plan' | 'entry' | 'month' | 'settings', entityId: string, action: string, before: unknown, after: unknown, now: number) {
   return c.env.DB.prepare('INSERT INTO audit_log (id, entity, entity_id, action, before_json, after_json, user_id, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(
     crypto.randomUUID(),
     entity,
@@ -230,7 +242,8 @@ export async function runBatch(c: Ctx, statements: D1PreparedStatement[]) {
  * silinmiş (mezar taşı) kayıtlar yeniden üretilmez. Tekrar çağrılması zararsızdır.
  */
 export async function ensureRecurring(c: Ctx, through: string) {
-  const limit = addMonths(currentMonthOf(c), MAX_MONTHS_AHEAD)
+  const startDay = await getStartDay(c)
+  const limit = addMonths(periodOf(todayOf(c), startDay), MAX_MONTHS_AHEAD)
   const upTo = through > limit ? limit : through
   const { results: plans } = await c.env.DB.prepare(
     "SELECT * FROM plans WHERE kind = 'recurring' AND closed_at IS NULL AND deleted_at IS NULL AND start_month <= ?",
@@ -258,6 +271,7 @@ export async function ensureRecurring(c: Ctx, through: string) {
         variable: !!plan.variable,
       },
       upTo,
+      startDay,
     )
     for (const item of list) {
       if (closed.has(item.month) || have.has(`${plan.id}|${item.month}`)) continue

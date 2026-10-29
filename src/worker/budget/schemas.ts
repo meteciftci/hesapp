@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { DATE_PATTERN, MONTH_PATTERN } from '../../shared/month'
-import { isDate } from '../../shared/month'
+import { DATE_PATTERN, isDate, MONTH_PATTERN } from '../../shared/month'
+import { MAX_START_DAY, MIN_START_DAY } from '../../shared/period'
 
 const MAX_KURUS = 9_000_000_000_00
 
@@ -81,3 +81,4 @@ export const schedulePaste = z
 export const planClose = z.object({ fromMonth: month, payoffAmount: kurus.optional() }).strict()
 export const monthClose = z.object({ bankBalance: signedKurus, name: name.optional() }).strict()
 export const monthOpening = z.object({ balance: signedKurus }).strict()
+export const settingsUpdate = z.object({ periodStartDay: z.number().int().min(MIN_START_DAY, 'başlangıç günü 1–28 arasında olmalı').max(MAX_START_DAY, 'başlangıç günü 1–28 arasında olmalı') }).strict()

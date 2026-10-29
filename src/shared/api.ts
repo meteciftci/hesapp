@@ -72,6 +72,10 @@ export interface MonthTotals {
 
 export interface MonthDto {
   month: string
+  /** Dönemin ilk günü (dahil), `YYYY-AA-GG` */
+  start: string
+  /** Dönemin son günü (dahil) */
+  end: string
   status: 'open' | 'closed'
   opening: OpeningDto
   /** Bu ayda elle girilmiş başlangıç bakiyesi (varsa) */
@@ -106,6 +110,8 @@ export interface UpcomingDto {
 
 export interface YearMonthDto {
   month: string
+  start: string
+  end: string
   status: 'open' | 'closed'
   income: number
   expense: number
@@ -119,4 +125,16 @@ export interface YearDto {
   year: number
   months: YearMonthDto[]
   totals: { income: number; expense: number; net: number }
+}
+
+export interface SettingsDto {
+  /** Bütçe döneminin başladığı gün (1–28). 1 ise dönem takvim ayıdır. */
+  periodStartDay: number
+}
+
+export interface SettingsUpdateResult extends SettingsDto {
+  /** Vadeleri yeni başlangıç gününe göre yeniden hesaplanan kayıt sayısı */
+  recalculated: number
+  /** Vadesi artık kendi döneminin dışında kalan (elle girilmiş) kayıt sayısı */
+  outsidePeriod: number
 }
