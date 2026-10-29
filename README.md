@@ -50,7 +50,11 @@ Cloudflare paneli → **Storage & databases → D1 → Create database**. Adı `
 3. Proje → **Settings → Build**:
    - **Build command:** `pnpm build`
    - **Deploy command:** `pnpm run deploy:cf`
-   - **Variables and secrets (build):** `D1_DATABASE_ID` = 1. adımdaki ID. Bu değer depoya yazılmaz; derlemede `wrangler.jsonc`'ye eklenir.
+   - **Build variables** (derleme sırasında okunan değişkenler): `D1_DATABASE_ID` = 1. adımdaki ID. Bu değer depoya yazılmaz; derlemede `wrangler.jsonc`'ye eklenir.
+
+> **Dikkat: iki ayrı değişken bölümü var.** *Build variables*, yalnızca derleme sırasında görünür. Çalışan uygulamanın okuduğu değişkenler (`SITE_URL`, `SETUP_CODE` gibi, 4. adım) Worker'ın **Settings → Variables and Secrets** bölümündeki **Production** değişkenleridir. Birini diğerine girmek "değişken tanımlı değil" hatası verir.
+
+> İki komutu karıştırmayın: *Build command* alanına `pnpm run deploy:cf` yazılırsa `pnpm build` hiç çalışmaz, veritabanı kimliği yazılmaz ve migration yer tutucu kimlikle başarısız olur.
 
 `deploy:cf` komutu önce veritabanı şemasını günceller (`wrangler d1 migrations apply`), sonra yayınlar.
 Sonraki her `main` güncellemesi otomatik derlenip yayına çıkar.
@@ -62,7 +66,7 @@ Worker → **Settings → Domains & Routes → Add → Custom domain** ile bir a
 
 ### 4. Worker değişkenlerini girin
 
-Worker → **Settings → Variables and Secrets** (tür: **Secret**):
+Worker → **Settings → Variables and Secrets** → **Production** (Build bölümü değil; tür: **Secret**):
 
 | Ad | Değer |
 |---|---|

@@ -116,7 +116,7 @@ Genel kurallar:
 | role | `owner` \| `member` | tek hesap sahibi, diğerleri üye |
 | created_at | integer | ms |
 
-Diğer kimlik tabloları: `passkeys`, `auth_sessions`, `auth_invites`, `auth_challenges`, `auth_limits` (bkz. 5.1). Bütçe tablolarındaki `created_by`/`updated_by` alanları `users(id)`'ye `ON DELETE SET NULL` ile bağlanır; kişi çıkarılsa da kayıtlar kalır.
+Diğer kimlik tabloları: `passkeys`, `auth_sessions`, `auth_invites`, `auth_challenges`, `auth_limits` (bkz. 5.1). Bütçe tablolarındaki `created_by`/`updated_by`/`user_id` alanları kullanıcı kimliğini düz metin olarak taşır (bilerek yabancı anahtar yok); kişi çıkarılsa da kayıtlar ve geçmiş kalır, ad bulunamazsa kimlik gösterilir. Şema: `migrations/0002_budget.sql`.
 
 **plans**
 
@@ -134,9 +134,9 @@ Diğer kimlik tabloları: `passkeys`, `auth_sessions`, `auth_invites`, `auth_cha
 | variable | boolean | tutar her ay değişir (ör. kart ekstresi); kayıtlar "tahmini" doğar |
 | auto_pay | boolean | |
 | note | text null | |
-| closed_at | text null | erken kapatma / sonlandırma |
-| created_by, updated_by | text FK users | |
-| created_at, updated_at, deleted_at | text | |
+| closed_at | integer null | erken kapatma / sonlandırma |
+| created_by, updated_by | text | kullanıcı kimliği |
+| created_at, updated_at, deleted_at | integer | ms |
 
 **entries**
 
@@ -146,7 +146,7 @@ Diğer kimlik tabloları: `passkeys`, `auth_sessions`, `auth_invites`, `auth_cha
 | month | text | hangi aya ait |
 | plan_id | text null FK | |
 | installment_no | integer null | taksitlide sıra no |
-| type | `normal` \| `carryover` \| `reconciliation` | devir ve kapanış farkı özel kayıtlardır |
+| type | `normal` \| `reconciliation` | kapanış farkı özel kayıttır; devir kayıt değil, hesaplanan değerdir (6.5) |
 | direction | `income` \| `expense` | |
 | name | text | |
 | planned_amount | integer | |
@@ -157,7 +157,7 @@ Diğer kimlik tabloları: `passkeys`, `auth_sessions`, `auth_invites`, `auth_cha
 | auto_pay | boolean | |
 | overridden | boolean | plandan farklı elle düzenlendi |
 | note | text null | |
-| created_by, updated_by | text FK users | |
+| created_by, updated_by | text | kullanıcı kimliği |
 | created_at, updated_at, deleted_at | text | |
 
 Bir ayın toplamlarında `actual_amount ?? planned_amount` kullanılır.
@@ -169,6 +169,8 @@ Bir ayın toplamlarında `actual_amount ?? planned_amount` kullanılır.
 | month | text PK | |
 | status | `open` \| `closed` | |
 | opening_balance | integer | devir; ilk ay için kurulumda girilir |
+| anchor_balance | integer null | uygulamaya başlanan ayda elle girilen başlangıç bakiyesi (aynı anda tek ay) |
+| opening_balance | integer null | kapanış anındaki devir (anlık görüntü) |
 | closing_balance | integer null | kapanışta girilen banka bakiyesi |
 | closed_at, closed_by | | |
 
@@ -179,10 +181,10 @@ Bir ayın toplamlarında `actual_amount ?? planned_amount` kullanılır.
 | id | text PK | |
 | entity | `plan` \| `entry` \| `month` | |
 | entity_id | text | |
-| action | `create` \| `update` \| `delete` \| `restore` \| `close` \| `reopen` | |
+| action | `create` · `update` · `delete` · `restore` · `pay` · `unpay` · `close` · `reopen` · `opening` · `schedule` | |
 | before, after | text (JSON) | |
 | user_id | text | |
-| at | text | |
+| at | integer | ms |
 
 ## 6. Kurallar (alan mantığı)
 
@@ -219,9 +221,11 @@ Seçilen aydan sonraki ödenmemiş kayıtlar silinir, plan `closed_at` alır. İ
 olması gereken kapanış = açılış (devir) + gelirler − giderler
 ```
 
-- Her ay listesinin başında, önceki ayın kapanış bakiyesi `carryover` kaydı olarak görünür (artı veya eksi).
-- Önceki ay henüz kapatılmamışsa devir, o ayın "olması gereken kapanış" değeridir ve "geçici" olarak işaretlenir. Önceki ay kapanınca banka bakiyesiyle kesinleşir.
-- Uygulamaya başlanan ilk ayın açılışı kurulumda bir kez girilir. İçe aktarılan geçmiş aylar kapalı ve devirsiz kabul edilir.
+- Devir bir kayıt değildir, hesaplanır; API ay yanıtında `opening: { amount, provisional }` olarak verir, arayüz listenin başında satır olarak gösterir (artı veya eksi).
+- Hesap: hedeften önceki **en son kapalı ayın banka bakiyesi** + aradaki ayların net toplamı. Kapalı ay yoksa **başlangıç bakiyesi (anchor)** + aradaki aylar. İkisi de yoksa 0.
+- Aradaki ay varsa (önceki ay henüz kapatılmamışsa) devir "geçici"dir; önceki ay kapanınca banka bakiyesiyle kesinleşir.
+- Uygulamaya başlanan ayın açılışı `PUT /months/:ay/opening` ile bir kez girilir (kapanmış ay varken değiştirilemez). İçe aktarılan geçmiş aylar için devir 0 alınır.
+- Bir aylık toplam, her kaydın geçerli tutarından (`actual ?? planned`) hesaplanır; silinmiş kayıtlar sayılmaz.
 
 ### 6.6 Ay kapanışı (eşitleme)
 
@@ -231,6 +235,8 @@ olması gereken kapanış = açılış (devir) + gelirler − giderler
    - fark < 0 ise aynı adla bir **gelir** (`reconciliation`) eklenir.
    - fark = 0 ise kayıt eklenmez.
 3. Ay `closed` olur, sonraki ayın açılışı = banka bakiyesi.
+   - Kapanış sırası zorunludur: yalnızca son kapalı ayın ardındaki (ya da ilk kapanışta başlangıç bakiyesinin girildiği) ay, ve en geç içinde bulunulan ay kapatılabilir.
+   - Kapalı aydaki kayıtlar değiştirilemez; toplu düzenlemelerde atlanır.
 4. **Yeniden açma:** yalnızca en son kapatılan ay yeniden açılabilir. Eşitleme kaydı silinir, sonraki ayın devri yeniden geçici olur.
 
 ### 6.7 Geri alma
@@ -251,15 +257,16 @@ Tümü `/api` altında, JSON, Zod ile doğrulanır.
 | GET/DELETE | `/auth/passkeys` · `/auth/passkeys/:id` | kendi cihazların |
 | GET/DELETE | `/auth/members` · `/auth/members/:id` | kişiler; çıkarma yalnızca hesap sahibine |
 | POST | `/auth/invites` | davet bağlantısı belirteci üretir (hesap sahibi) |
-| GET | `/months/:month` | ayın kayıtları, açılış, toplamlar, durum |
+| GET | `/months/:month` | ayın kayıtları, devir, toplamlar, durum (eksik tekrarlayan kayıtları tamamlar) |
+| PUT | `/months/:month/opening` | `{ balance }` başlangıç bakiyesi |
 | POST | `/months/:month/close` | `{ bankBalance }` ile kapanış |
 | POST | `/months/:month/reopen` | |
 | GET | `/upcoming?days=30` | yaklaşan ödemeler |
 | GET | `/years/:year` | aylık özetler |
 | GET/POST | `/plans` | listele / oluştur |
-| GET/PATCH/DELETE | `/plans/:id` | detay (kayıtlarıyla) / güncelle / sil |
-| POST | `/plans/:id/schedule` | ödeme planı yapıştırma |
-| POST | `/plans/:id/close` | erken kapatma |
+| GET/DELETE | `/plans/:id` | detay (kayıtlarıyla) / sil. Plan alanları kayıt düzenlemesinde `following`/`all` kapsamıyla güncellenir |
+| POST | `/plans/:id/schedule` | ödeme planı yapıştırma: `{ text \| amounts, startNo?, force?, dryRun? }` |
+| POST | `/plans/:id/close` | erken kapatma: `{ fromMonth, payoffAmount? }` |
 | POST | `/entries` | tek seferlik kayıt |
 | PATCH | `/entries/:id` | `{ ..., scope: "this" \| "following" \| "all" }` |
 | POST | `/entries/:id/pay` · `/unpay` | |
