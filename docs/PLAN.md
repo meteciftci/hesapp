@@ -316,3 +316,35 @@ README'de adım adım: depoyu çatallama, D1 oluşturma, Access uygulaması ve i
 | M7 | README kurulum rehberi, sürüm 1.0 | Başka biri depodan kendi kurulumunu yapabiliyor |
 
 Her adım ayrı bir pull request olarak gelir.
+
+## 13. Commit ve dal kuralları
+
+[Conventional Commits](https://www.conventionalcommits.org/) biçimi kullanılır:
+
+```
+<tür>: <kısa açıklama>
+
+<isteğe bağlı ayrıntılı açıklama>
+```
+
+- Başlık tamamen **küçük harf**, en fazla 72 karakter, sonunda nokta yok.
+- Türkçe yazılır, emir kipiyle: `feat: ay kapanışı ekranını ekle`.
+- Ayrıntı gerekiyorsa bir boş satırdan sonra gövdeye yazılır; gövde serbest biçimlidir.
+
+| Tür | Kullanım |
+|---|---|
+| `feat` | yeni özellik |
+| `fix` | hata düzeltme |
+| `docs` | yalnızca belge |
+| `refactor` | davranışı değiştirmeyen kod düzenlemesi |
+| `test` | test ekleme veya düzeltme |
+| `style` | biçim, boşluk (davranış değişmez) |
+| `perf` | performans |
+| `ci` | GitHub Actions, dağıtım |
+| `chore` | bağımlılık, yapılandırma, diğer |
+
+Geriye uyumsuz değişiklikte tür sonrasına `!` eklenir: `feat!: yedek biçimini 2. sürüme geçir`.
+
+- Dal adları: `<tür>/<kısa-ad>`, ör. `feat/ay-kapanisi`.
+- Pull request başlıkları da aynı biçimdedir; birleştirme "squash" ile yapılır, böylece `main`'de her PR tek bir kurala uygun commit olur.
+- M0'da commitlint eklenir; kurala uymayan commit ve PR başlıkları CI'da reddedilir.
