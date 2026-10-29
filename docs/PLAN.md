@@ -18,7 +18,7 @@ Bir hanenin aylık gelir ve giderlerini, kredi ve kart taksitlerini, tekrarlayan
 
 ### v1
 
-1. Ay ekranı: gelir/gider listesi, devir, özet (elde kalan, ödenen/kalan gider).
+1. Ay (dönem) ekranı: gelir/gider listesi, devir, özet (elde kalan, ödenen/kalan gider). Dönem ayın 1'inde ya da seçilen bir günde (ör. 15) başlar (bölüm 5.2).
 2. Plan tanımı: tekrarlayan (her ay) ve taksitli kalemler; gelir veya gider yönünde.
 3. Kayıt ekleme, düzenleme, silme; toplu düzenlemede kapsam seçimi.
 4. Planlanan ve gerçekleşen tutar; "tahmini" işareti (ör. ekstresi henüz kesilmemiş kart).
@@ -97,6 +97,20 @@ Genel kurallar:
 - **Oturum:** Sunucuda saklanan rastgele belirteç (yalnızca özeti tutulur), `__Host-` önekli, `HttpOnly; Secure; SameSite=Strict` çerez; varsayılan 30 gün (`SESSION_DAYS`). Çıkışta ve kişi/cihaz silinince sunucuda geçersizleşir.
 - **Koruma:** Durum değiştiren isteklerde Origin ve özel başlık denetimi (CSRF), IP ve genel hız sınırı, tarayıcıya bağlı tek kullanımlık doğrulama istekleri (challenge), sayaç denetimi. Kurulum, davet ve cihaz ekleme yarışları tek SQL ifadesinde koşullu yazmayla çözülür.
 - **Kurtarma:** Bir kişinin tüm cihazını kaybetmesi: hesap sahibi kişiyi çıkarıp yeniden davet eder. Hesap sahibinin tüm cihazlarını kaybetmesi: Cloudflare hesabına erişimi olan kişi `wrangler d1 execute DB --remote --command "DELETE FROM users"` ile kimlik tablolarını sıfırlar (bütçe verisi korunur), `SETUP_CODE`'u yeniden girip kurulumu tekrarlar. Kök güven, Cloudflare hesabının kendisidir.
+
+### 5.2 Dönem (bütçe ayı)
+
+Bir hane için "ay" çoğu zaman takvim ayı değildir: maaş 15'inde yatıyorsa bütçe 15'inde başlar, ertesi ayın 14'ünde biter. Bu yüzden her yerde "ay" dediğimiz şey aslında **dönemdir**.
+
+- **Ayar:** hane düzeyinde `periodStartDay` (1–28, varsayılan 1). `settings` tablosunda tutulur; `GET/PUT /settings`.
+- **Adlandırma:** dönem, başladığı ayın etiketiyle anılır. `2026-10` ve başlangıç günü 15 ise dönem **15 Eki 2026 – 14 Kas 2026**'dır. (Mevcut Excel dosyasındaki sayfalar da böyle: "Ağustos" sayfası 15 Ağustos–1 Eylül arasını kapsar.) Başlangıç günü 1 ise dönem takvim ayıyla aynıdır.
+- **Plan günü → vade:** plandaki gün `d` ise `d ≥ periodStartDay` olduğunda vade dönemin ilk ayında, `d < periodStartDay` olduğunda ertesi ayda olur. Ayın uzunluğuna sıkıştırma aynen geçerlidir. Örnek (başlangıç 15): gün 24 → 24 Eki; gün 1 → 1 Kas; gün 31 → 31 Eki; gün 5 → 5 Kas.
+- **Dönemin aralığı:** kayıt vadesi, kaydın döneminin başlangıç ve bitiş tarihleri arasında olmalıdır (şu anki "aynı ay içinde olmalı" denetiminin yerine geçer).
+- **Bugün hangi dönemde:** bugünün günü `periodStartDay` ve sonrasıysa o ayın etiketi, öncesiyse bir önceki ayın etiketidir. "Gelecek dönem kapatılamaz", "ufuk" ve "yaklaşan" hesapları buna göre çalışır; "yaklaşan" zaten vade tarihine bakar.
+- **Devir, kapanış, plan kayıtları** dönem etiketlerinin düz bir ay dizisi olarak ilerlemesiyle aynen çalışır; bölüm 6'daki kurallar değişmez.
+- **Değiştirme:** kapalı dönem yokken değiştirilebilir. Değişince açık dönemlerdeki, elle düzenlenmemiş plan kayıtlarının vadeleri yeni başlangıç gününe göre yeniden hesaplanır. Kapalı dönem varsa geçmişin tutarlılığı için değiştirilemez.
+- **Arayüz:** dönem gezgini başlıkta tarih aralığını gösterir ("15 Eki – 14 Kas"), yıl ekranı dönem sırasıyla listeler, ilk kurulumda başlangıç günü sorulur. Dönem seçimi hem ileri/geri oklarla hem de listeden yapılır.
+- **Yedek/içe aktarma:** yedek dosyası `periodStartDay`'i taşır. Excel sihirbazında her sayfa bir dönem etiketine eşlenir.
 
 ### Temel ayrım: plan ve kayıt
 
@@ -337,7 +351,8 @@ README'de adım adım: depoyu çatallama, D1 oluşturma, build/deploy komutları
 | M0 | Proje iskeleti, commit denetimi, dağıtım yapılandırması, Access doğrulama | Boş uygulama alan adında açılıyor ✔ |
 | M1 | D1 bağlantısı, migration altyapısı, passkey girişi (kurulum, davet, cihaz yönetimi), giriş/ayarlar ekranları | Kurulum → davet → giriş akışı gerçek tarayıcıda ve testlerle çalışıyor |
 | M2 | Bütçe şeması, alan mantığı (bölüm 6), API | Bölüm 6'nın testleri geçiyor |
-| M3 | Ay ekranı, ekle/düzenle/sil, ödendi, tema | Telefonda bir ay baştan sona yönetilebiliyor |
+| M2.1 | Dönem başlangıç günü: `settings`, vade/dönem hesapları, API'de dönem aralığı (bölüm 5.2) | Başlangıç 15 iken planlar, kapanış ve yaklaşan doğru dönemlerde |
+| M3 | Dönem ekranı, ekle/düzenle/sil, ödendi, tema | Telefonda bir ay baştan sona yönetilebiliyor |
 | M4 | Planlar, plan detayı, yaklaşan | Kredi tanımlanıp taksitleri izlenebiliyor |
 | M5 | Ay kapanışı, devir, ilk kurulum (başlangıç bakiyesi) | Bir ay kapatılıp sonraki doğru devirle açılıyor |
 | M6 | Yıl ekranı, PWA, değişiklik geçmişi | |
