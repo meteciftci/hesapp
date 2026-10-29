@@ -102,13 +102,13 @@ Genel kurallar:
 
 Bir hane için "ay" çoğu zaman takvim ayı değildir: maaş 15'inde yatıyorsa bütçe 15'inde başlar, ertesi ayın 14'ünde biter. Bu yüzden her yerde "ay" dediğimiz şey aslında **dönemdir**.
 
-- **Ayar:** hane düzeyinde `periodStartDay` (1–28, varsayılan 1). `settings` tablosunda tutulur; `GET/PUT /settings`.
+- **Ayar:** hane düzeyinde `periodStartDay` (1–28, varsayılan 1). `settings` tablosunda tutulur (`0003_settings.sql`); `GET/PUT /settings`. Her ay yanıtı (`/months/:ay`, `/years/:yıl`) dönemin `start` ve `end` tarihlerini taşır.
 - **Adlandırma:** dönem, başladığı ayın etiketiyle anılır. `2026-10` ve başlangıç günü 15 ise dönem **15 Eki 2026 – 14 Kas 2026**'dır. (Mevcut Excel dosyasındaki sayfalar da böyle: "Ağustos" sayfası 15 Ağustos–1 Eylül arasını kapsar.) Başlangıç günü 1 ise dönem takvim ayıyla aynıdır.
 - **Plan günü → vade:** plandaki gün `d` ise `d ≥ periodStartDay` olduğunda vade dönemin ilk ayında, `d < periodStartDay` olduğunda ertesi ayda olur. Ayın uzunluğuna sıkıştırma aynen geçerlidir. Örnek (başlangıç 15): gün 24 → 24 Eki; gün 1 → 1 Kas; gün 31 → 31 Eki; gün 5 → 5 Kas.
 - **Dönemin aralığı:** kayıt vadesi, kaydın döneminin başlangıç ve bitiş tarihleri arasında olmalıdır (şu anki "aynı ay içinde olmalı" denetiminin yerine geçer).
 - **Bugün hangi dönemde:** bugünün günü `periodStartDay` ve sonrasıysa o ayın etiketi, öncesiyse bir önceki ayın etiketidir. "Gelecek dönem kapatılamaz", "ufuk" ve "yaklaşan" hesapları buna göre çalışır; "yaklaşan" zaten vade tarihine bakar.
 - **Devir, kapanış, plan kayıtları** dönem etiketlerinin düz bir ay dizisi olarak ilerlemesiyle aynen çalışır; bölüm 6'daki kurallar değişmez.
-- **Değiştirme:** kapalı dönem yokken değiştirilebilir. Değişince açık dönemlerdeki, elle düzenlenmemiş plan kayıtlarının vadeleri yeni başlangıç gününe göre yeniden hesaplanır. Kapalı dönem varsa geçmişin tutarlılığı için değiştirilemez.
+- **Değiştirme:** kapalı dönem yokken değiştirilebilir (varsa 409); geçmiş kapanışların tutarlılığı için. Değişince plana bağlı kayıtlar yeniden yerleştirilir: elle düzenlenmemişler plan gününe göre hesaplanır; elle düzenlenmişlerde (tutarı vb. değişmiş) kullanıcının seçtiği gün korunur, yalnızca yeni dönemin dışında kalıyorsa dönemin içine alınır. Plansız (tek seferlik) kayıtların tarihine dokunulmaz; yeni dönemin dışında kalanların sayısı yanıtta `outsidePeriod` olarak döner ve arayüz bunları uyarı olarak gösterir. Değişiklik `audit_log`'a (`settings`) yazılır.
 - **Arayüz:** dönem gezgini başlıkta tarih aralığını gösterir ("15 Eki – 14 Kas"), yıl ekranı dönem sırasıyla listeler, ilk kurulumda başlangıç günü sorulur. Dönem seçimi hem ileri/geri oklarla hem de listeden yapılır.
 - **Yedek/içe aktarma:** yedek dosyası `periodStartDay`'i taşır. Excel sihirbazında her sayfa bir dönem etiketine eşlenir.
 
@@ -193,7 +193,7 @@ Bir ayın toplamlarında `actual_amount ?? planned_amount` kullanılır.
 | alan | tip | not |
 |---|---|---|
 | id | text PK | |
-| entity | `plan` \| `entry` \| `month` | |
+| entity | `plan` \| `entry` \| `month` \| `settings` | |
 | entity_id | text | |
 | action | `create` · `update` · `delete` · `restore` · `pay` · `unpay` · `close` · `reopen` · `opening` · `schedule` | |
 | before, after | text (JSON) | |
@@ -273,6 +273,7 @@ Tümü `/api` altında, JSON, Zod ile doğrulanır.
 | POST | `/auth/invites` | davet bağlantısı belirteci üretir (hesap sahibi) |
 | GET | `/months/:month` | ayın kayıtları, devir, toplamlar, durum (eksik tekrarlayan kayıtları tamamlar) |
 | PUT | `/months/:month/opening` | `{ balance }` başlangıç bakiyesi |
+| GET/PUT | `/settings` | `{ periodStartDay }`; PUT kapalı dönem varken 409, yanıt `recalculated` ve `outsidePeriod` sayılarını verir |
 | POST | `/months/:month/close` | `{ bankBalance }` ile kapanış |
 | POST | `/months/:month/reopen` | |
 | GET | `/upcoming?days=30` | yaklaşan ödemeler |
@@ -351,7 +352,7 @@ README'de adım adım: depoyu çatallama, D1 oluşturma, build/deploy komutları
 | M0 | Proje iskeleti, commit denetimi, dağıtım yapılandırması, Access doğrulama | Boş uygulama alan adında açılıyor ✔ |
 | M1 | D1 bağlantısı, migration altyapısı, passkey girişi (kurulum, davet, cihaz yönetimi), giriş/ayarlar ekranları | Kurulum → davet → giriş akışı gerçek tarayıcıda ve testlerle çalışıyor |
 | M2 | Bütçe şeması, alan mantığı (bölüm 6), API | Bölüm 6'nın testleri geçiyor |
-| M2.1 | Dönem başlangıç günü: `settings`, vade/dönem hesapları, API'de dönem aralığı (bölüm 5.2) | Başlangıç 15 iken planlar, kapanış ve yaklaşan doğru dönemlerde |
+| M2.1 | Dönem başlangıç günü: `settings`, vade/dönem hesapları, API'de dönem aralığı (bölüm 5.2) | Başlangıç 15 iken planlar, kapanış ve yaklaşan doğru dönemlerde ✔ |
 | M3 | Dönem ekranı, ekle/düzenle/sil, ödendi, tema | Telefonda bir ay baştan sona yönetilebiliyor |
 | M4 | Planlar, plan detayı, yaklaşan | Kredi tanımlanıp taksitleri izlenebiliyor |
 | M5 | Ay kapanışı, devir, ilk kurulum (başlangıç bakiyesi) | Bir ay kapatılıp sonraki doğru devirle açılıyor |

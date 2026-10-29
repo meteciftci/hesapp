@@ -5,8 +5,8 @@ Cloudflare'in ücretsiz planında (Workers + D1) kendi alan adınızda çalışa
 Giriş **passkey** ile yapılır: parola yok, e-posta yok; her kişi kendi cihazının parmak izi, yüz tanıma ya da PIN doğrulamasını kullanır.
 
 > Durum: geliştirme aşamasında. Bütçe API'si hazır (M2); arayüz sırada. Plan ve yol haritası için [`docs/PLAN.md`](docs/PLAN.md).
->
-> Planlanan: bütçe dönemi ayın 1'i yerine seçtiğiniz bir günde (ör. maaş günü olan 15'inde) başlayabilecek ([plan, bölüm 5.2](docs/PLAN.md)).
+
+Bütçe dönemi takvim ayı olabilir ya da maaş gününüze göre ayın 15'inde (1–28 arası istediğiniz günde) başlayabilir; ayar `PUT /api/settings` ile yapılır, arayüzü sırada ([plan, bölüm 5.2](docs/PLAN.md)).
 
 ## Geliştirme
 
