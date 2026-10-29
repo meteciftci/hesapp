@@ -1,6 +1,5 @@
-import { createMiddleware } from 'hono/factory'
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose'
-import type { AppBindings, Env } from './env'
+import type { AuthUser, Env } from '../env'
 
 export type KeyResolver = (teamDomain: string) => JWTVerifyGetKey
 
@@ -74,11 +73,10 @@ export async function resolveUser(
   return { ok: true, email }
 }
 
-export function accessAuth(keyResolver: KeyResolver = remoteKeyResolver) {
-  return createMiddleware<AppBindings>(async (c, next) => {
-    const result = await resolveUser(c.env, c.req.raw.headers, keyResolver)
-    if (!result.ok) return c.json({ error: result.message }, result.status)
-    c.set('user', { email: result.email })
-    await next()
-  })
+export async function accessUser(env: Env, headers: Headers, keyResolver: KeyResolver): Promise<
+  { ok: true; user: AuthUser } | { ok: false; status: 401 | 403 | 500; message: string }
+> {
+  const result = await resolveUser(env, headers, keyResolver)
+  if (!result.ok) return result
+  return { ok: true, user: { id: result.email, name: result.email, role: 'owner' } }
 }

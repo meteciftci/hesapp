@@ -1,9 +1,10 @@
 # hesapp
 
 Hane için basit, mobil öncelikli bir gelir–gider ve taksit takip uygulaması.
-Cloudflare'in ücretsiz planında (Workers + D1 + Access) kendi alan adınızda çalışacak şekilde tasarlanmıştır.
+Cloudflare'in ücretsiz planında (Workers + D1) kendi alan adınızda çalışacak şekilde tasarlanmıştır.
+Giriş **passkey** ile yapılır: parola yok, e-posta yok; her kişi kendi cihazının parmak izi, yüz tanıma ya da PIN doğrulamasını kullanır.
 
-> Durum: geliştirme aşamasında (M0: iskelet). Plan ve yol haritası için [`docs/PLAN.md`](docs/PLAN.md).
+> Durum: geliştirme aşamasında (M1: passkey girişi). Plan ve yol haritası için [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Geliştirme
 
@@ -11,14 +12,16 @@ Gereksinimler: Node.js 22+, [pnpm](https://pnpm.io).
 
 ```sh
 pnpm install
-cp .dev.vars.example .dev.vars   # yerel sahte kullanıcı (depoya girmez)
+cp .dev.vars.example .dev.vars   # yerel ayarlar (depoya girmez)
 pnpm dev                         # http://localhost:5173
 ```
 
+İlk açılışta kurulum formu çıkar; kurulum kodu `.dev.vars` içindeki `SETUP_CODE` değeridir.
+
 | Komut | İş |
 |---|---|
-| `pnpm dev` | Vite + yerel Worker |
-| `pnpm test` | birim ve API testleri |
+| `pnpm dev` | yerel D1 migration'ı + Vite + yerel Worker |
+| `pnpm test` | birim ve API testleri (sanal passkey cihazı, gerçek D1 benzetimi) |
 | `pnpm typecheck` | tip denetimi |
 | `pnpm build` | üretim derlemesi |
 
@@ -36,44 +39,65 @@ fix: şubat ayında vade gününü düzelt
 
 Önkoşul: alan adınızın DNS'i Cloudflare'de olmalı.
 
-### 1. Worker'ı GitHub'a bağlayın (Workers Builds)
+### 1. D1 veritabanını oluşturun
+
+Cloudflare paneli → **Storage & databases → D1 → Create database**. Adı `hesapp` olsun. Oluşan veritabanının **ID** değerini not edin.
+
+### 2. Worker'ı GitHub'a bağlayın (Workers Builds)
 
 1. Depoyu çatallayın (fork) ya da kendi hesabınıza kopyalayın.
-2. Cloudflare paneli → **Workers & Pages** → **Create** → **Import a repository**; GitHub hesabınızı bağlayıp depoyu seçin.
-3. Proje adı `wrangler.jsonc` içindeki `name` ile aynı olmalıdır (`hesapp`).
-4. Build ayarları:
+2. **Workers & Pages** → **Create** → **Import a repository**; GitHub hesabınızı bağlayıp depoyu seçin. Proje adı `wrangler.jsonc` içindeki `name` ile aynı olmalıdır (`hesapp`).
+3. Proje → **Settings → Build**:
    - **Build command:** `pnpm build`
-   - **Deploy command:** `npx wrangler deploy`
-   - **Root directory:** `/`
+   - **Deploy command:** `pnpm run deploy:cf`
+   - **Variables and secrets (build):** `D1_DATABASE_ID` = 1. adımdaki ID. Bu değer depoya yazılmaz; derlemede `wrangler.jsonc`'ye eklenir.
 
+`deploy:cf` komutu önce veritabanı şemasını günceller (`wrangler d1 migrations apply`), sonra yayınlar.
 Sonraki her `main` güncellemesi otomatik derlenip yayına çıkar.
 
-### 2. Alan adı bağlayın
+### 3. Alan adı bağlayın
 
-Worker → **Settings** → **Domains & Routes** → **Add** → **Custom domain** ile bir alt alan adı (ör. `butce.ornek.com`) ekleyin.
-`workers.dev` ve önizleme adresleri Access'i atlatmamak için bilerek kapalıdır.
-
-### 3. Access ile girişi koruyun
-
-1. Cloudflare **Zero Trust** → **Access** → **Applications** → **Add an application** → **Self-hosted**.
-2. Uygulama alan adı olarak 2. adımdaki alt alan adını girin.
-3. Bir **Allow** politikası ekleyin; yalnızca izin vereceğiniz e-postaları yazın. Giriş yöntemi olarak **One-time PIN** yeterlidir.
-4. Uygulamayı kaydedin; **Application Audience (AUD) Tag** değerini kopyalayın.
-5. Takım alan adınızı not edin (`<takım>.cloudflareaccess.com`; Zero Trust → Settings → Custom Pages altında görünür).
+Worker → **Settings → Domains & Routes → Add → Custom domain** ile bir alt alan adı ekleyin (ör. `butce.ornek.com`).
+`workers.dev` ve önizleme adresleri bilerek kapalıdır.
 
 ### 4. Worker değişkenlerini girin
 
-Worker → **Settings** → **Variables and Secrets**:
+Worker → **Settings → Variables and Secrets** (tür: **Secret**):
 
 | Ad | Değer |
 |---|---|
-| `ACCESS_TEAM_DOMAIN` | `<takım>.cloudflareaccess.com` |
-| `ACCESS_AUD` | 3. adımda kopyalanan AUD (gizli değişken olarak ekleyin) |
-| `ALLOWED_EMAILS` | isteğe bağlı, virgülle ayrılmış e-postalar (ikinci kontrol) |
+| `SITE_URL` | `https://butce.ornek.com` (3. adımdaki adres, sonunda `/` olmadan) |
+| `SETUP_CODE` | parola yöneticinizle ürettiğiniz en az 32 karakterlik rastgele değer |
 
-> `DEV_USER_EMAIL` değişkenini canlı ortamda **asla** tanımlamayın; yalnızca yerel geliştirme içindir.
+İsteğe bağlı: `SESSION_DAYS` (varsayılan 30), `MAX_USERS` (varsayılan 5), `RP_ID` (varsayılan: `SITE_URL` alan adı).
 
-Uygulama, Access'in her isteğe eklediği imzalı belgeyi (JWT) kendisi de doğrular. Bu iki değişken eksikse tüm API kapalı kalır.
+### 5. İlk kurulum
+
+1. Adresi telefonunuzda açın. Kurulum formu çıkar.
+2. Adınızı, `SETUP_CODE` değerini ve cihaz adını girip **Passkey oluştur**'a dokunun; cihazınızın doğrulamasını (parmak izi/yüz/PIN) tamamlayın.
+3. Kurulum bittikten sonra `SETUP_CODE` değişkenini silebilirsiniz; ilk kullanıcıdan sonra kurulum zaten kapanır.
+4. En az ikinci bir cihazınızı **Ayarlar → Bu cihazı ekle** ile kaydedin (telefon kaybına karşı).
+
+### 6. Başka kişileri ekleyin
+
+**Ayarlar → Yeni kişi davet et**: kişinin adını yazın, üretilen bağlantıyı yalnızca o kişiyle paylaşın (24 saat geçerli, tek kullanımlık). Kişi bağlantıyı kendi telefonunda açıp kendi passkey'ini oluşturur.
+
+### Cihaz kaybı ve kurtarma
+
+- **Bir üye cihazını kaybederse:** hesap sahibi Ayarlar'dan kişiyi çıkarıp yeniden davet eder. Kişi birden fazla cihaz kaydettiyse kaybolan cihazın anahtarını Ayarlar'dan silmesi yeterli.
+- **Hesap sahibi tüm cihazlarını kaybederse:** Cloudflare hesabına erişen kişi kimlik tablolarını sıfırlayıp kurulumu yeniden yapar (bütçe verisi korunur):
+
+  ```sh
+  pnpm wrangler d1 execute DB --remote --command "DELETE FROM users"
+  ```
+
+  Ardından `SETUP_CODE` değişkenini yeniden girip adres 5. adımdaki gibi kurulur.
+
+## Alternatif: Cloudflare Access ile giriş
+
+Passkey yerine Cloudflare Access kullanmak isterseniz `AUTH_MODE=access` yapın ve Access uygulamasını alan adına bağlayın.
+Gerekli değişkenler: `ACCESS_TEAM_DOMAIN` (`<takım>.cloudflareaccess.com`), `ACCESS_AUD`, isteğe bağlı `ALLOWED_EMAILS`.
+Bu modda passkey uçları kapalıdır; Worker, Access'in imzalı giriş belgesini kendisi de doğrular ve ayarlar eksikse API kapalı kalır.
 
 ## Lisans
 

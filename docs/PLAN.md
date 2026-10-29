@@ -42,22 +42,20 @@ Bir hanenin aylık gelir ve giderlerini, kredi ve kart taksitlerini, tekrarlayan
 
 ```
 Tarayıcı (PWA, React)
-   │  HTTPS, Cloudflare Access oturumu
-   ▼
-Cloudflare Access  ── izinli e-postalar dışında kimse geçemez
-   │
+   │  HTTPS, passkey ile açılan oturum çerezi
    ▼
 Cloudflare Worker
    ├─ statik dosyalar (derlenmiş ön yüz)
-   └─ /api/*  (Hono)
+   └─ /api/*  (Hono)  ── oturum yoksa 401
          │
          ▼
       D1 (SQLite)
 ```
 
 - Tek Worker hem ön yüzü hem API'yi sunar. Ayrı bir sunucu yok.
-- **Kimlik doğrulama Access ile yapılır.** Worker, isteklerdeki `Cf-Access-Jwt-Assertion` başlığını Access'in açık anahtarlarıyla doğrular (takım alan adı ve uygulama AUD değeri ortam değişkeninden gelir). Yalnızca başlığa güvenilmez; doğrulanmayan istek 401 alır. `workers.dev` adresi kapatılır.
-- Kullanıcı kaydı doğrulanmış e-postadan otomatik oluşturulur. İsteğe bağlı `ALLOWED_EMAILS` listesi ikinci bir kontrol sağlar.
+- **Kimlik doğrulama varsayılan olarak passkey ile yapılır** (bkz. bölüm 5.1). Parola ve e-posta yoktur; her kişi kendi cihazının parmak izi/yüz tanıma/PIN doğrulamasıyla girer.
+- **İsteğe bağlı Access modu** (`AUTH_MODE=access`): Worker, `Cf-Access-Jwt-Assertion` başlığını Access'in açık anahtarlarıyla doğrular. Passkey uçları bu modda kapalıdır. Kendi kimlik sağlayıcısını kullanmak isteyenler içindir.
+- `workers.dev` ve önizleme adresleri kapalıdır; uygulama yalnızca bağlanan özel alan adından erişilir.
 - Excel okuma/yazma tarayıcıda yapılır; Worker'ın CPU limitine yük binmez.
 
 ## 4. Teknoloji
@@ -70,7 +68,8 @@ Cloudflare Worker
 | Sunucu durumu | TanStack Query | Önbellek, iyimser güncelleme ("ödendi" anında işlenir) |
 | Yönlendirme | React Router | |
 | API | Hono | Workers için hafif, tip güvenli |
-| Veritabanı | D1 + Drizzle ORM + drizzle-kit | Tip güvenli sorgular, sürümlü şema değişiklikleri (migration) |
+| Veritabanı | D1; elle yazılmış SQL migration dosyaları + D1 API'si | Tetikleyici, kısıt ve tek ifadelik koşullu yazma (atomik korumalar) doğrudan SQL ile; ek bağımlılık yok |
+| Kimlik doğrulama | WebAuthn / passkey (`@simplewebauthn`) | Parolasız, kimlik avına dayanıklı; kütüphane doğrulamayı yapar |
 | Doğrulama | Zod | Aynı şema hem API girişini hem formları doğrular |
 | Tarih | date-fns (tr yerel ayarı) | |
 | Grafik | Recharts | |
@@ -89,6 +88,16 @@ Genel kurallar:
 - Kimlikler ULID.
 - Silme yumuşaktır (`deleted_at`); geri alma ve geçmiş için.
 
+### 5.1 Kimlik doğrulama modeli (passkey)
+
+- **İlk kurulum:** Worker'a gizli değişken olarak `SETUP_CODE` (en az 32 karakter) girilir. Kullanıcı yokken kurulum sayfasında bu kodla hesap sahibi ve ilk passkey oluşturulur. Kullanıcı oluştuktan sonra kurulum kalıcı olarak kapanır; kod silinebilir.
+- **Davet:** Hesap sahibi Ayarlar'dan bir kişi adı için tek kullanımlık, 24 saat geçerli davet bağlantısı üretir (`/davet#<belirteç>`; belirteç adres parçasında olduğundan sunucu kaydına girmez). Davetli kendi cihazında passkey oluşturarak üye olur.
+- **Cihaz ekleme:** Her kişi birden fazla cihaz (en çok 10) kaydedebilir. Cihaz ekleme/silme, davet ve kişi çıkarma işlemleri son 10 dakika içinde passkey ile girilmiş taze oturum ister.
+- **Giriş:** Keşfedilebilir kimlik bilgileri (usernameless): cihaz hangi hesabın kullanılacağını kendisi seçtirir. Kullanıcı doğrulaması (UV) zorunludur.
+- **Oturum:** Sunucuda saklanan rastgele belirteç (yalnızca özeti tutulur), `__Host-` önekli, `HttpOnly; Secure; SameSite=Strict` çerez; varsayılan 30 gün (`SESSION_DAYS`). Çıkışta ve kişi/cihaz silinince sunucuda geçersizleşir.
+- **Koruma:** Durum değiştiren isteklerde Origin ve özel başlık denetimi (CSRF), IP ve genel hız sınırı, tarayıcıya bağlı tek kullanımlık doğrulama istekleri (challenge), sayaç denetimi. Kurulum, davet ve cihaz ekleme yarışları tek SQL ifadesinde koşullu yazmayla çözülür.
+- **Kurtarma:** Bir kişinin tüm cihazını kaybetmesi: hesap sahibi kişiyi çıkarıp yeniden davet eder. Hesap sahibinin tüm cihazlarını kaybetmesi: Cloudflare hesabına erişimi olan kişi `wrangler d1 execute DB --remote --command "DELETE FROM users"` ile kimlik tablolarını sıfırlar (bütçe verisi korunur), `SETUP_CODE`'u yeniden girip kurulumu tekrarlar. Kök güven, Cloudflare hesabının kendisidir.
+
 ### Temel ayrım: plan ve kayıt
 
 - **Plan**, tekrar eden bir şeyin tanımıdır: "her ay 15'inde, 84 taksit, şu tutar".
@@ -98,14 +107,16 @@ Genel kurallar:
 
 ### Tablolar
 
-**users**
+**users** (migration `0001_auth.sql`)
 
 | alan | tip | not |
 |---|---|---|
-| id | text PK | |
-| email | text unique | Access'ten |
-| display_name | text | Ayarlar'dan değiştirilebilir |
-| created_at | text | |
+| id | text PK | rastgele UUID; WebAuthn kullanıcı tanıtıcısı |
+| name | text | görünen ad |
+| role | `owner` \| `member` | tek hesap sahibi, diğerleri üye |
+| created_at | integer | ms |
+
+Diğer kimlik tabloları: `passkeys`, `auth_sessions`, `auth_invites`, `auth_challenges`, `auth_limits` (bkz. 5.1). Bütçe tablolarındaki `created_by`/`updated_by` alanları `users(id)`'ye `ON DELETE SET NULL` ile bağlanır; kişi çıkarılsa da kayıtlar kalır.
 
 **plans**
 
@@ -232,7 +243,14 @@ Tümü `/api` altında, JSON, Zod ile doğrulanır.
 
 | Yöntem | Yol | İş |
 |---|---|---|
-| GET | `/me` | oturumdaki kullanıcı |
+| GET | `/me` | oturumdaki kullanıcı (`id`, `name`, `role`) |
+| GET | `/auth/state` | herkese açık: kip ve kurulum yapılmış mı |
+| POST | `/auth/login/options` · `/auth/login/verify` | passkey ile giriş |
+| POST | `/auth/register/options` · `/auth/register/verify` | `kind`: `setup`, `invite` ya da `device` |
+| POST | `/auth/logout` | |
+| GET/DELETE | `/auth/passkeys` · `/auth/passkeys/:id` | kendi cihazların |
+| GET/DELETE | `/auth/members` · `/auth/members/:id` | kişiler; çıkarma yalnızca hesap sahibine |
+| POST | `/auth/invites` | davet bağlantısı belirteci üretir (hesap sahibi) |
 | GET | `/months/:month` | ayın kayıtları, açılış, toplamlar, durum |
 | POST | `/months/:month/close` | `{ bankBalance }` ile kapanış |
 | POST | `/months/:month/reopen` | |
@@ -249,7 +267,6 @@ Tümü `/api` altında, JSON, Zod ile doğrulanır.
 | GET | `/audit?entity=&id=` | değişiklik geçmişi |
 | GET | `/export` | JSON tam yedek |
 | POST | `/import` | JSON yedeği geri yükleme (boş veritabanına) |
-| POST | `/setup` | ilk kurulum: başlangıç ayı ve açılış bakiyesi |
 
 ## 8. Ekranlar
 
@@ -264,7 +281,7 @@ Mobilde alt kısımda yüzen menü (Ay, Yaklaşan, Planlar, Yıl) ve yanında yu
 7. **Yıl:** toplamlar, ay sonu kalan çubukları.
 8. **Ayı kapat (alt panel):** hesap dökümü, banka bakiyesi, fark ve devir önizlemesi.
 9. **Ayarlar:** tema, dışa/içe aktarma, kullanıcı adı.
-10. **İlk kurulum:** başlangıç ayı, açılış bakiyesi, isteğe bağlı içe aktarma.
+10. **Giriş, ilk kurulum ve davet:** passkey ile giriş; kullanıcı yoksa kurulum formu (ad, kurulum kodu, cihaz adı); davet bağlantısıyla katılım. (M1'de yapıldı.) Başlangıç ayı ve açılış bakiyesi sihirbazı M5'te eklenir.
 
 Tema: açık, koyu, sistem; seçim cihazda saklanır.
 
@@ -281,19 +298,23 @@ Depoda kişisel değer yoktur. Gerekenler:
 
 | Ad | Nerede | İş |
 |---|---|---|
-| `ACCESS_TEAM_DOMAIN` | Worker değişkeni | JWT doğrulama |
-| `ACCESS_AUD` | Worker gizli değişkeni | JWT doğrulama |
-| `ALLOWED_EMAILS` | Worker gizli değişkeni (isteğe bağlı) | ikinci kontrol |
+| `SITE_URL` | Worker gizli değişkeni | uygulamanın tam adresi (`https://…`); passkey için zorunlu |
+| `SETUP_CODE` | Worker gizli değişkeni | ilk kurulum kodu (≥32 karakter); kurulumdan sonra silinebilir |
+| `RP_ID` | Worker değişkeni (isteğe bağlı) | varsayılan: `SITE_URL` alan adı |
+| `SESSION_DAYS`, `MAX_USERS` | Worker değişkeni (isteğe bağlı) | varsayılan 30 gün, 5 kişi |
+| `D1_DATABASE_ID` | **Build** değişkeni | derlemede `wrangler.jsonc`'ye yazılır; depoda yoktur |
+| `AUTH_MODE=access`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `ALLOWED_EMAILS` | Worker (isteğe bağlı) | yalnızca Access modunda |
 | `TZ` | Worker değişkeni | varsayılan `Europe/Istanbul` |
 
 - Depodaki `wrangler.jsonc` yalnızca yer tutucu içerir. Alan adına özgü değerler (Access takım alanı, AUD, izinli e-postalar) Cloudflare panelinde Worker'ın "Variables and Secrets" bölümüne girilir.
-- Özel alan adı ve Access uygulaması Cloudflare panelinden tanımlanır, kodda yer almaz.
+- `wrangler.jsonc`'de `keep_vars: true` vardır; panelden girilen değişkenler dağıtımda silinmez. Yine de hassas olanlar Secret türüyle girilir.
+- Özel alan adı Cloudflare panelinden bağlanır, kodda yer almaz.
 - **Dağıtım:** GitHub Actions kullanılmaz. Cloudflare'in Git bağlantısı (Workers Builds) depoyu izler; `main`'e her birleştirmede derler (`pnpm build`) ve yayınlar (`npx wrangler deploy`). Testler geliştirme sırasında yerelde/oturumda çalıştırılır, birleştirmeden önce geçmesi şarttır.
-- **D1 şema güncellemeleri (M1'den sonra):** `wrangler d1 migrations apply` Workers Builds'te dağıtım komutunun parçası olur.
-- Yerel geliştirme: `pnpm dev` (Vite + yerel D1), Access yerine `.dev.vars` ile sahte kullanıcı.
+- **D1 şema güncellemeleri:** Workers Builds'te dağıtım komutu `pnpm run deploy:cf` olur (`wrangler d1 migrations apply DB --remote && wrangler deploy`). Build komutu `pnpm build` (D1 kimliğini `D1_DATABASE_ID` build değişkeninden yazar).
+- Yerel geliştirme: `pnpm dev` (yerel D1 migration'ı + Vite). `.dev.vars` ile `APP_ENV=local`, `localhost` adresi ve örnek kurulum kodu kullanılır.
 - `pnpm seed`: uydurma örnek veri (ör. "Örnek Konut Kredisi", "Maaş A").
 
-README'de adım adım: depoyu çatallama, D1 oluşturma, Access uygulaması ve izinli e-postalar, özel alan adı, gizli değişkenler.
+README'de adım adım: depoyu çatallama, D1 oluşturma, build/deploy komutları, özel alan adı, gizli değişkenler, ilk kurulum.
 
 ## 11. Test
 
@@ -306,14 +327,15 @@ README'de adım adım: depoyu çatallama, D1 oluşturma, Access uygulaması ve i
 
 | Adım | İçerik | Bitti sayılması için |
 |---|---|---|
-| M0 | Proje iskeleti, commit denetimi, dağıtım yapılandırması, Access doğrulama | Boş uygulama alan adında, Access girişiyle açılıyor (Cloudflare kurulumu sonrası) |
-| M1 | Şema, migration, alan mantığı, API | Bölüm 6'nın testleri geçiyor |
-| M2 | Ay ekranı, ekle/düzenle/sil, ödendi, tema | Telefonda bir ay baştan sona yönetilebiliyor |
-| M3 | Planlar, plan detayı, yaklaşan | Kredi tanımlanıp taksitleri izlenebiliyor |
-| M4 | Ay kapanışı, devir, ilk kurulum | Bir ay kapatılıp sonraki doğru devirle açılıyor |
-| M5 | Yıl ekranı, PWA, değişiklik geçmişi | |
-| M6 | JSON yedek/geri yükleme, Excel dışa aktarma, Excel içe aktarma sihirbazı | Yedek döngüsü testi geçiyor |
-| M7 | README kurulum rehberi, sürüm 1.0 | Başka biri depodan kendi kurulumunu yapabiliyor |
+| M0 | Proje iskeleti, commit denetimi, dağıtım yapılandırması, Access doğrulama | Boş uygulama alan adında açılıyor ✔ |
+| M1 | D1 bağlantısı, migration altyapısı, passkey girişi (kurulum, davet, cihaz yönetimi), giriş/ayarlar ekranları | Kurulum → davet → giriş akışı gerçek tarayıcıda ve testlerle çalışıyor |
+| M2 | Bütçe şeması, alan mantığı (bölüm 6), API | Bölüm 6'nın testleri geçiyor |
+| M3 | Ay ekranı, ekle/düzenle/sil, ödendi, tema | Telefonda bir ay baştan sona yönetilebiliyor |
+| M4 | Planlar, plan detayı, yaklaşan | Kredi tanımlanıp taksitleri izlenebiliyor |
+| M5 | Ay kapanışı, devir, ilk kurulum (başlangıç bakiyesi) | Bir ay kapatılıp sonraki doğru devirle açılıyor |
+| M6 | Yıl ekranı, PWA, değişiklik geçmişi | |
+| M7 | JSON yedek/geri yükleme, Excel dışa aktarma, Excel içe aktarma sihirbazı | Yedek döngüsü testi geçiyor |
+| M8 | README kurulum rehberi son hâli, sürüm 1.0 | Başka biri depodan kendi kurulumunu yapabiliyor |
 
 Her adım ayrı bir pull request olarak gelir.
 

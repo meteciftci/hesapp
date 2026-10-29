@@ -1,7 +1,7 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { createApp } from './app'
-import type { Env } from './env'
+import { createApp } from '../app'
+import type { Env } from '../env'
 
 const TEAM = 'ornek.cloudflareaccess.com'
 const AUD = 'aud-ornek'
@@ -22,10 +22,10 @@ async function token(opts: { key?: CryptoKey; aud?: string; iss?: string; email?
     .sign(opts.key ?? privateKey)
 }
 
-const accessEnv: Env = { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD }
+const accessEnv: Partial<Env> = { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD }
 
-function call(path: string, env: Env, jwt?: string) {
-  return app.request(path, { headers: jwt ? { 'Cf-Access-Jwt-Assertion': jwt } : {} }, env)
+function call(path: string, env: Partial<Env>, jwt?: string) {
+  return app.request(path, { headers: jwt ? { 'Cf-Access-Jwt-Assertion': jwt } : {} }, { AUTH_MODE: 'access', ...env })
 }
 
 beforeAll(async () => {
@@ -37,7 +37,7 @@ beforeAll(async () => {
   app = createApp(() => keys)
 })
 
-describe('/api/health', () => {
+describe('access modu: /api/health', () => {
   it('kimlik istemeden yanıt verir', async () => {
     const res = await call('/api/health', {})
     expect(res.status).toBe(200)
@@ -49,7 +49,7 @@ describe('access jwt doğrulaması', () => {
   it('geçerli belgeyle kullanıcıyı döndürür (e-posta küçük harfe çevrilir)', async () => {
     const res = await call('/api/me', accessEnv, await token({ email: 'Kisi@Example.com' }))
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ email: 'kisi@example.com' })
+    expect(await res.json()).toEqual({ id: 'kisi@example.com', name: 'kisi@example.com', role: 'owner' })
   })
 
   it('belge yoksa 401', async () => {
@@ -82,18 +82,18 @@ describe('access jwt doğrulaması', () => {
   })
 
   it('takım alan adındaki https:// ve sondaki / yok sayılır', async () => {
-    const env: Env = { ACCESS_TEAM_DOMAIN: `https://${TEAM}/`, ACCESS_AUD: AUD }
+    const env: Partial<Env> = { ACCESS_TEAM_DOMAIN: `https://${TEAM}/`, ACCESS_AUD: AUD }
     expect((await call('/api/me', env, await token())).status).toBe(200)
   })
 
   it('access yapılandırılmışken sahte geliştirme kullanıcısı geçerli olmaz', async () => {
-    const env: Env = { ...accessEnv, DEV_USER_EMAIL: 'dev@example.com' }
+    const env: Partial<Env> = { ...accessEnv, DEV_USER_EMAIL: 'dev@example.com' }
     expect((await call('/api/me', env)).status).toBe(401)
   })
 })
 
 describe('izinli e-posta listesi', () => {
-  const env: Env = { ...accessEnv, ALLOWED_EMAILS: ' a@example.com , B@example.com ' }
+  const env: Partial<Env> = { ...accessEnv, ALLOWED_EMAILS: ' a@example.com , B@example.com ' }
 
   it('listedeki e-postaya izin verir', async () => {
     expect((await call('/api/me', env, await token({ email: 'b@example.com' }))).status).toBe(200)
@@ -108,7 +108,7 @@ describe('yerel geliştirme kullanıcısı', () => {
   it('access yapılandırılmamışsa geliştirme kullanıcısını kullanır', async () => {
     const res = await call('/api/me', { DEV_USER_EMAIL: 'dev@example.com' })
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ email: 'dev@example.com' })
+    expect(await res.json()).toEqual({ id: 'dev@example.com', name: 'dev@example.com', role: 'owner' })
   })
 
   it('hiçbir yapılandırma yoksa kimseyi içeri almaz', async () => {

@@ -1,22 +1,33 @@
-import { useEffect, useState } from 'react'
-import type { MeResponse } from '../shared/api'
+import { Navigate, Outlet, Route, Routes } from 'react-router'
+import { AuthProvider, useAuth } from './auth'
+import { Davet } from './pages/Davet'
+import { Giris } from './pages/Giris'
+import { Ana } from './pages/Ana'
+import { Ayarlar } from './pages/Ayarlar'
+import { Notice, Page } from './ui'
+
+function Guard() {
+  const { status, user, error, state } = useAuth()
+  if (status === 'loading') return <Page><p className="opacity-60">Yükleniyor…</p></Page>
+  if (status === 'error') return <Page><Notice>Sunucuya ulaşılamadı: {error}</Notice></Page>
+  if (!user) {
+    return state?.mode === 'access' ? <Page><Notice>Oturum doğrulanamadı. Cloudflare Access ayarlarını kontrol edin.</Notice></Page> : <Navigate to="/giris" replace />
+  }
+  return <Outlet />
+}
 
 export function App() {
-  const [me, setMe] = useState<MeResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    fetch('/api/me')
-      .then((r) => (r.ok ? (r.json() as Promise<MeResponse>) : Promise.reject(new Error(String(r.status)))))
-      .then(setMe)
-      .catch((e: Error) => setError(e.message))
-  }, [])
-
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-2 p-6">
-      <h1 className="text-2xl font-semibold">hesapp</h1>
-      {me && <p className="text-sm opacity-70">Giriş: {me.email}</p>}
-      {error && <p className="text-sm text-red-600">Oturum doğrulanamadı ({error})</p>}
-    </main>
+    <AuthProvider>
+      <Routes>
+        <Route path="/giris" element={<Giris />} />
+        <Route path="/davet" element={<Davet />} />
+        <Route element={<Guard />}>
+          <Route path="/" element={<Ana />} />
+          <Route path="/ayarlar" element={<Ayarlar />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AuthProvider>
   )
 }

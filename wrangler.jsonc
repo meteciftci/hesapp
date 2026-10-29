@@ -6,7 +6,7 @@
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Access'i atlatmamak için workers.dev ve önizleme adresleri kapalı.
+  // Giriş korumasını atlatmamak için workers.dev ve önizleme adresleri kapalı.
   "workers_dev": false,
   "preview_urls": false,
   "assets": {
@@ -16,5 +16,16 @@
   "vars": {
     "TZ": "Europe/Istanbul"
   },
+  // Panelde girilen değişkenler (SITE_URL, SETUP_CODE...) dağıtımda silinmesin.
+  "keep_vars": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "hesapp",
+      // Yer tutucu: gerçek kimlik derlemede D1_DATABASE_ID değişkeninden yazılır.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
   "observability": { "enabled": true }
 }
