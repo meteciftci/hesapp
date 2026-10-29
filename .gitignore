@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env
+.env.*
+!.env.example
+*.local
+*.log
+.DS_Store
+coverage/
+# Kişisel veri dosyaları depoya girmez
+*.xlsx
+*.csv
+backups/
