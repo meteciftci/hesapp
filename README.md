@@ -4,7 +4,9 @@ Hane için basit, mobil öncelikli bir gelir–gider ve taksit takip uygulaması
 Cloudflare'in ücretsiz planında (Workers + D1) kendi alan adınızda çalışacak şekilde tasarlanmıştır.
 Giriş **passkey** ile yapılır: parola yok, e-posta yok; her kişi kendi cihazının parmak izi, yüz tanıma ya da PIN doğrulamasını kullanır.
 
-> Durum: geliştirme aşamasında (M1: passkey girişi). Plan ve yol haritası için [`docs/PLAN.md`](docs/PLAN.md).
+> Durum: geliştirme aşamasında. Bütçe API'si hazır (M2); arayüz sırada. Plan ve yol haritası için [`docs/PLAN.md`](docs/PLAN.md).
+>
+> Planlanan: bütçe dönemi ayın 1'i yerine seçtiğiniz bir günde (ör. maaş günü olan 15'inde) başlayabilecek ([plan, bölüm 5.2](docs/PLAN.md)).
 
 ## Geliştirme
 
@@ -25,16 +27,6 @@ pnpm dev                         # http://localhost:5173
 | `pnpm typecheck` | tip denetimi |
 | `pnpm build` | üretim derlemesi |
 
-### Commit kuralı
-
-`<tür>: <kısa açıklama>` biçimi, tamamen küçük harf (ayrıntı için [plan, bölüm 13](docs/PLAN.md)).
-Kural `pnpm install` ile kurulan bir git hook'u ile denetlenir.
-
-```
-feat: ay kapanışı ekranını ekle
-fix: şubat ayında vade gününü düzelt
-```
-
 ## Kurulum (kendi Cloudflare hesabınızda)
 
 Önkoşul: alan adınızın DNS'i Cloudflare'de olmalı.
@@ -50,7 +42,11 @@ Cloudflare paneli → **Storage & databases → D1 → Create database**. Adı `
 3. Proje → **Settings → Build**:
    - **Build command:** `pnpm build`
    - **Deploy command:** `pnpm run deploy:cf`
-   - **Variables and secrets (build):** `D1_DATABASE_ID` = 1. adımdaki ID. Bu değer depoya yazılmaz; derlemede `wrangler.jsonc`'ye eklenir.
+   - **Build variables** (derleme sırasında okunan değişkenler): `D1_DATABASE_ID` = 1. adımdaki ID. Bu değer depoya yazılmaz; derlemede `wrangler.jsonc`'ye eklenir.
+
+> **Dikkat: iki ayrı değişken bölümü var.** *Build variables*, yalnızca derleme sırasında görünür. Çalışan uygulamanın okuduğu değişkenler (`SITE_URL`, `SETUP_CODE` gibi, 4. adım) Worker'ın **Settings → Variables and Secrets** bölümündeki **Production** değişkenleridir. Birini diğerine girmek "değişken tanımlı değil" hatası verir.
+
+> İki komutu karıştırmayın: *Build command* alanına `pnpm run deploy:cf` yazılırsa `pnpm build` hiç çalışmaz, veritabanı kimliği yazılmaz ve migration yer tutucu kimlikle başarısız olur.
 
 `deploy:cf` komutu önce veritabanı şemasını günceller (`wrangler d1 migrations apply`), sonra yayınlar.
 Sonraki her `main` güncellemesi otomatik derlenip yayına çıkar.
@@ -62,7 +58,7 @@ Worker → **Settings → Domains & Routes → Add → Custom domain** ile bir a
 
 ### 4. Worker değişkenlerini girin
 
-Worker → **Settings → Variables and Secrets** (tür: **Secret**):
+Worker → **Settings → Variables and Secrets** → **Production** (Build bölümü değil; tür: **Secret**):
 
 | Ad | Değer |
 |---|---|
@@ -92,12 +88,6 @@ Worker → **Settings → Variables and Secrets** (tür: **Secret**):
   ```
 
   Ardından `SETUP_CODE` değişkenini yeniden girip adres 5. adımdaki gibi kurulur.
-
-## Alternatif: Cloudflare Access ile giriş
-
-Passkey yerine Cloudflare Access kullanmak isterseniz `AUTH_MODE=access` yapın ve Access uygulamasını alan adına bağlayın.
-Gerekli değişkenler: `ACCESS_TEAM_DOMAIN` (`<takım>.cloudflareaccess.com`), `ACCESS_AUD`, isteğe bağlı `ALLOWED_EMAILS`.
-Bu modda passkey uçları kapalıdır; Worker, Access'in imzalı giriş belgesini kendisi de doğrular ve ayarlar eksikse API kapalı kalır.
 
 ## Lisans
 
