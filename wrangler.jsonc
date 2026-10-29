@@ -1,0 +1,20 @@
+{
+  // Bu dosya yalnızca yer tutucu içerir; kişisel değer yazmayın.
+  // Özel alan adı Cloudflare panelinden bağlanır (README: kurulum).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hesapp",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Access'i atlatmamak için workers.dev ve önizleme adresleri kapalı.
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "vars": {
+    "TZ": "Europe/Istanbul"
+  },
+  "observability": { "enabled": true }
+}

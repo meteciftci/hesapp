@@ -1,0 +1,4 @@
+# Yerel geliştirme için: bu dosyayı `.dev.vars` olarak kopyalayın (depoya girmez).
+# Access yapılandırılmadığında geliştirme kullanıcısı olarak bu e-posta kullanılır.
+# Canlı ortamda ASLA tanımlamayın.
+DEV_USER_EMAIL=ornek@example.com
