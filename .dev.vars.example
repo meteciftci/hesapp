@@ -1,0 +1,7 @@
+# Yerel geliştirme için: bu dosyayı `.dev.vars` olarak kopyalayın (depoya girmez).
+APP_ENV=local
+SITE_URL=http://localhost:5173
+RP_ID=localhost
+# İlk kurulum kodu (en az 32 karakter). Canlıda parola yöneticisiyle rastgele üretin.
+SETUP_CODE=yerel-gelistirme-kurulum-kodu-0123456789abcdef
+# Access modu denemek isterseniz: AUTH_MODE=access ve DEV_USER_EMAIL=ornek@example.com
