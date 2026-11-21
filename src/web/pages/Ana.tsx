@@ -111,9 +111,19 @@ function AyEkrani({ month, onMonth }: { month: string; onMonth: (m: string) => v
             <div className="flex flex-col gap-3 lg:sticky lg:top-6">
               <section className="flex flex-col gap-4 rounded-[20px] bg-hero p-5 text-white">
                 <div>
-                  <p className="text-[13px] text-white/75">{closed ? 'Elde kalan' : 'Ay sonunda elde kalan'}{data.opening.provisional ? ' · devir geçici' : ''}</p>
-                  <p className="text-[34px] leading-tight font-semibold tracking-tight">{signed(data.totals.expectedClosing)}</p>
-                  <p className="text-xs text-white/60">{shortDate(data.start)} – {shortDate(data.end)}</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-[13px] text-white/75">{closed ? 'Elde kalan' : 'Ay sonunda elde kalan'}{data.opening.provisional ? ' · devir geçici' : ''}</p>
+                      <p className="text-xl leading-tight font-semibold tracking-tight">{signed(data.totals.expectedClosing)}</p>
+                    </div>
+                    {!closed && (
+                      <div>
+                        <p className="text-[13px] text-white/75">Şu an bankada olması gereken</p>
+                        <p className="text-xl leading-tight font-semibold tracking-tight">{signed(data.totals.currentBalance)}</p>
+                      </div>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-white/60">{shortDate(data.start)} – {shortDate(data.end)}</p>
                 </div>
                 {/* Gerçekleşen: ödenen/alınan kayıtlar; bekleyen: henüz ödenmemiş ya da alınmamış (tahmini) */}
                 <table className="w-full text-right text-sm tabular-nums">
@@ -142,7 +152,6 @@ function AyEkrani({ month, onMonth }: { month: string; onMonth: (m: string) => v
                     </tr>
                   </tbody>
                 </table>
-                {!closed && <p className="-mt-1 text-xs text-white/75">Şu an bankada olması gereken <strong className="font-semibold text-white">{signed(data.totals.currentBalance)}</strong></p>}
                 <div className="flex flex-col gap-1.5">
                   <div className="h-1.5 overflow-hidden rounded-full bg-white/20" role="progressbar" aria-label="Ödenen gider" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
                     <div className="h-full bg-[#8fd3b4]" style={{ width: `${progress}%` }} />
