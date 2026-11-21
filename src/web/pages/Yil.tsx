@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { YearMonthDto } from '../../shared/api'
 import { errorMessage } from '../api'
 import { YearPickerTitle } from '../pickers'
 import { currentPeriod, money, monthName, signed } from '../month/format'
@@ -7,6 +8,74 @@ import { BottomNav, Notice, Page, PageHeader, SectionLabel } from '../ui'
 
 /** Tutarı bar etiketinde kuruşsuz gösterir: +3.598 / −8.402 */
 const whole = (kurus: number) => `${kurus < 0 ? '−' : '+'}${Math.abs(Math.round(kurus / 100)).toLocaleString('tr-TR')}`
+const plain = (kurus: number) => Math.round(kurus / 100).toLocaleString('tr-TR')
+
+const CHART = { w: 330, h: 170, left: 34, bottom: 24, top: 10, bar: 9 }
+
+/** Aylık gelir/gider: gruplu çubuk grafik ve altında tablo. Kapanmamış (gelecek) dönemler soluktur. */
+function MonthlyIncomeExpense({ months, totals, thisPeriod }: { months: YearMonthDto[]; totals: { income: number; expense: number; net: number }; thisPeriod: string }) {
+  const top = Math.max(1, ...months.flatMap((m) => [m.income, m.expense]))
+  const plotH = CHART.h - CHART.top - CHART.bottom
+  const step = (CHART.w - CHART.left) / Math.max(1, months.length)
+  const y = (v: number) => CHART.top + plotH * (1 - v / top)
+  return (
+    <>
+      <SectionLabel>Aylık gelir / gider</SectionLabel>
+      <div className="flex flex-col gap-3 rounded-2xl bg-surface px-3.5 py-3.5">
+        <div className="flex gap-3 text-xs text-muted">
+          <span className="flex items-center gap-1"><i className="size-2.5 rounded-xs bg-good" />Gelir</span>
+          <span className="flex items-center gap-1"><i className="size-2.5 rounded-xs bg-bar-bad" />Gider</span>
+        </div>
+        <svg viewBox={`0 0 ${CHART.w} ${CHART.h}`} width="100%" role="img" aria-label="Aylık gelir ve gider çubuk grafiği">
+          {[0, 0.5, 1].map((f) => (
+            <g key={f}>
+              <line x1={CHART.left} x2={CHART.w} y1={y(top * f)} y2={y(top * f)} className="stroke-line" />
+              <text x={0} y={y(top * f) + 3} className="fill-muted text-[10px]">{plain(top * f)}</text>
+            </g>
+          ))}
+          {months.map((m, i) => {
+            const x = CHART.left + i * step + step / 2
+            return (
+              <g key={m.month} opacity={m.month > thisPeriod ? 0.55 : 1}>
+                <rect x={x - CHART.bar - 1} y={y(m.income)} width={CHART.bar} height={CHART.top + plotH - y(m.income)} rx={2} className="fill-good" />
+                <rect x={x + 1} y={y(m.expense)} width={CHART.bar} height={CHART.top + plotH - y(m.expense)} rx={2} className="fill-bar-bad" />
+                <text x={x} y={CHART.h - 8} textAnchor="middle" className="fill-muted text-[10px]">{monthName(m.month).slice(0, 3)}</text>
+              </g>
+            )
+          })}
+        </svg>
+        <table className="w-full text-right text-[13px] tabular-nums">
+          <thead>
+            <tr className="text-xs text-muted">
+              <th scope="col" className="py-1 text-left font-normal">Ay</th>
+              <th scope="col" className="py-1 font-normal">Gelir</th>
+              <th scope="col" className="py-1 font-normal">Gider</th>
+              <th scope="col" className="py-1 font-normal">Net</th>
+            </tr>
+          </thead>
+          <tbody>
+            {months.map((m) => (
+              <tr key={m.month} className={`border-t border-line ${m.month > thisPeriod ? 'opacity-60' : ''}`}>
+                <th scope="row" className="py-1.5 text-left font-normal">{monthName(m.month).slice(0, 3)}</th>
+                <td className="py-1.5">{plain(m.income)}</td>
+                <td className="py-1.5">{plain(m.expense)}</td>
+                <td className={`py-1.5 ${m.net < 0 ? 'text-bad' : 'text-good'}`}>{whole(m.net)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-line font-semibold">
+              <th scope="row" className="py-1.5 text-left">Toplam</th>
+              <td className="py-1.5">{plain(totals.income)}</td>
+              <td className="py-1.5">{plain(totals.expense)}</td>
+              <td className={`py-1.5 ${totals.net < 0 ? 'text-bad' : 'text-good'}`}>{whole(totals.net)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </>
+  )
+}
 
 export function Yil() {
   const startDay = useSettings().data?.periodStartDay ?? 1
@@ -27,6 +96,8 @@ export function Yil() {
             <div><p className="text-xs text-muted">Gider</p><p className="text-[15px] font-semibold">{Math.round(data.totals.expense / 100).toLocaleString('tr-TR')}</p></div>
             <div><p className="text-xs text-muted">Net</p><p className={`text-[15px] font-semibold ${data.totals.net < 0 ? 'text-bad' : 'text-good'}`}>{whole(data.totals.net)}</p></div>
           </section>
+
+          <MonthlyIncomeExpense months={data.months} totals={data.totals} thisPeriod={thisPeriod} />
 
           <div className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-6">
             <div className="flex flex-col gap-2">
