@@ -308,6 +308,26 @@ describe('davet ile ikinci kişi', () => {
     expect(members.map((m) => [m.name, m.role, m.passkeys])).toEqual([['Ayşe', 'owner', 1], ['Mehmet', 'member', 1]])
   })
 
+  it('davette e-posta taşınır; ad ve e-posta sonradan düzenlenebilir (kişi kendini, sahip herkesi)', async () => {
+    const ownerSession = await setupOwner(await Device.create())
+    const res = await call('/api/auth/invites', { body: { name: 'Mehmet Yılmaz', email: 'mehmet@ornek.test' }, cookies: ownerSession })
+    const token = ((await res.json()) as { token: string }).token
+    const r = await register(await Device.create(), { kind: 'invite', inviteToken: token })
+    const memberSession = cookieOf(r.verify, 'session')
+    const list = async () => (await (await call('/api/auth/members', { cookies: ownerSession })).json()) as { id: string; name: string; email: string | null; role: string }[]
+    const member = (await list()).find((m) => m.role === 'member')!
+    expect(member).toMatchObject({ name: 'Mehmet Yılmaz', email: 'mehmet@ornek.test' })
+
+    expect((await call('/api/auth/invites', { body: { name: 'X', email: 'bozuk' }, cookies: ownerSession })).status).toBe(400)
+    expect((await call(`/api/auth/members/${member.id}`, { method: 'PATCH', body: { name: 'Mehmet Y.', email: '' }, cookies: memberSession })).status).toBe(200)
+    expect((await list()).find((m) => m.id === member.id)).toMatchObject({ name: 'Mehmet Y.', email: null })
+    expect(await (await call('/api/me', { cookies: memberSession })).json()).toMatchObject({ name: 'Mehmet Y.' })
+
+    const owner = (await list()).find((m) => m.role === 'owner')!
+    expect((await call(`/api/auth/members/${owner.id}`, { method: 'PATCH', body: { name: 'Hacker' }, cookies: memberSession })).status).toBe(403)
+    expect((await call(`/api/auth/members/${member.id}`, { method: 'PATCH', body: { name: 'Mehmet Yılmaz' }, cookies: ownerSession })).status).toBe(200)
+  })
+
   it('üye davet üretemez, geçersiz ya da süresi dolmuş davet çalışmaz', async () => {
     const ownerSession = await setupOwner(await Device.create())
     const token = await invite(ownerSession)

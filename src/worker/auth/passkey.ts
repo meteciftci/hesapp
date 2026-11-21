@@ -67,6 +67,13 @@ function cleanText(value: unknown, max: number, label: string, fallback?: string
   return text
 }
 
+function cleanEmail(value: unknown): string | null {
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text) return null
+  if (text.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) fail(400, 'e-posta adresi geçersiz')
+  return text
+}
+
 function config(c: Ctx) {
   const site = siteConfig(c)
   if (!site) fail(503, 'giriş güvenli bir adres için yapılandırılmadı (SITE_URL)')
@@ -336,7 +343,7 @@ export function createAuthRoutes() {
       if (!challenge.invite_hash) fail(400, 'geçersiz istek')
       const [, keyResult] = await c.env.DB.batch<{ id: string }>([
         c.env.DB.prepare(
-          "INSERT INTO users (id, name, role, created_at) SELECT ?, user_name, 'member', ? FROM auth_invites WHERE token_hash = ? AND consumed = 0 AND expires_at > ? AND (SELECT COUNT(*) FROM users) < ?",
+          "INSERT INTO users (id, name, email, role, created_at) SELECT ?, user_name, email, 'member', ? FROM auth_invites WHERE token_hash = ? AND consumed = 0 AND expires_at > ? AND (SELECT COUNT(*) FROM users) < ?",
         ).bind(userId, now, challenge.invite_hash, now, maxUsers(c)),
         insertKey('EXISTS (SELECT 1 FROM users WHERE id = ?)', userId),
         c.env.DB.prepare('UPDATE auth_invites SET consumed = 1 WHERE token_hash = ? AND consumed = 0 AND EXISTS (SELECT 1 FROM passkeys WHERE id = ?)').bind(
@@ -393,8 +400,8 @@ export function createAuthRoutes() {
   auth.get('/members', async (c) => {
     await requireSession(c)
     const { results } = await c.env.DB.prepare(
-      'SELECT u.id, u.name, u.role, u.created_at, (SELECT COUNT(*) FROM passkeys p WHERE p.user_id = u.id) AS passkeys FROM users u ORDER BY u.created_at',
-    ).all<{ id: string; name: string; role: string; created_at: number; passkeys: number }>()
+      'SELECT u.id, u.name, u.email, u.role, u.created_at, (SELECT COUNT(*) FROM passkeys p WHERE p.user_id = u.id) AS passkeys FROM users u ORDER BY u.created_at',
+    ).all<{ id: string; name: string; email: string | null; role: string; created_at: number; passkeys: number }>()
     return c.json(results)
   })
 
@@ -403,14 +410,28 @@ export function createAuthRoutes() {
     if (session.role !== 'owner') fail(403, 'yalnızca hesap sahibi kişi davet edebilir')
     const body = await c.req.json<Record<string, unknown>>().catch((): Record<string, unknown> => ({}))
     const name = cleanText(body.name, 40, 'kişinin adı')
+    const email = cleanEmail(body.email)
     const now = Date.now()
     const pending = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM auth_invites WHERE consumed = 0 AND expires_at > ?').bind(now).first<{ n: number }>()
     if ((await userCount(c)) + (pending?.n ?? 0) >= maxUsers(c)) fail(409, 'kişi sınırına ulaşıldı')
     const token = randomToken()
-    await c.env.DB.prepare('INSERT INTO auth_invites (token_hash, created_by, user_name, expires_at) VALUES (?, ?, ?, ?)')
-      .bind(await hashToken(token), session.userId, name, now + INVITE_MS)
+    await c.env.DB.prepare('INSERT INTO auth_invites (token_hash, created_by, user_name, email, expires_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(await hashToken(token), session.userId, name, email, now + INVITE_MS)
       .run()
     return c.json({ token, expiresAt: now + INVITE_MS })
+  })
+
+  // Kişi kendi adını/e-postasını, hesap sahibi herkesinkini değiştirebilir.
+  auth.patch('/members/:id', async (c) => {
+    const session = await requireSession(c)
+    const id = c.req.param('id')
+    if (session.role !== 'owner' && id !== session.userId) fail(403, 'yalnızca kendi bilgilerini değiştirebilirsin')
+    const body = await c.req.json<Record<string, unknown>>().catch((): Record<string, unknown> => ({}))
+    const name = cleanText(body.name, 40, 'ad')
+    const email = cleanEmail(body.email)
+    const result = await c.env.DB.prepare('UPDATE users SET name = ?, email = ? WHERE id = ?').bind(name, email, id).run()
+    if (!result.meta.changes) fail(404, 'kişi bulunamadı')
+    return c.json({ ok: true })
   })
 
   auth.delete('/members/:id', async (c) => {

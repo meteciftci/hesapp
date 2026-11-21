@@ -17,13 +17,15 @@ import { BottomNav, Button, Card, Field, Group, Icon, Notice, Page, PageHeader, 
 const date = (ms: number) => new Date(ms).toLocaleDateString('tr-TR')
 
 export function Ayarlar() {
-  const { user, logout } = useAuth()
+  const { user, logout, refresh } = useAuth()
   const confirm = useConfirm()
   const navigate = useNavigate()
   const [keys, setKeys] = useState<PasskeyInfo[]>([])
   const [members, setMembers] = useState<MemberInfo[]>([])
   const [message, setMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null)
   const [inviteName, setInviteName] = useState('')
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [editing, setEditing] = useState<{ id: string; name: string; email: string } | null>(null)
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const isOwner = user?.role === 'owner'
@@ -53,9 +55,17 @@ export function Ayarlar() {
   }
 
   async function createInvite() {
-    const { token } = await api<{ token: string }>('/auth/invites', { body: { name: inviteName } })
+    const { token } = await api<{ token: string }>('/auth/invites', { body: { name: inviteName, email: inviteEmail } })
     setInviteLink(`${window.location.origin}/davet#${token}`)
     setInviteName('')
+    setInviteEmail('')
+  }
+
+  async function saveMember() {
+    if (!editing) return
+    await api(`/auth/members/${editing.id}`, { method: 'PATCH', body: { name: editing.name, email: editing.email } })
+    if (editing.id === user?.id) await refresh()
+    setEditing(null)
   }
 
   async function share(link: string) {
@@ -131,19 +141,41 @@ export function Ayarlar() {
         <h2 className="font-semibold">Kişiler</h2>
         <ul className="flex flex-col gap-2">
           {members.map((m) => (
-            <li key={m.id} className="flex items-center justify-between gap-2">
-              <span>{m.name} <span className="text-xs text-muted">· {m.role === 'owner' ? 'sahip' : 'üye'} · {m.passkeys} cihaz</span></span>
-              {isOwner && m.role !== 'owner' && (
-                <Button variant="danger" className="min-h-11" disabled={busy} onClick={() => void confirm({ title: `${m.name} çıkarılsın mı?`, message: 'Kişinin tüm cihazları silinir ve oturumu kapanır. Eklediği kayıtlar kalır. Yeniden davet edilebilir.', confirmLabel: 'Çıkar', destructive: true }).then((ok) => { if (ok) void act(() => api(`/auth/members/${m.id}`, { method: 'DELETE' }), 'Kişi çıkarıldı.') })}>
-                  Çıkar
-                </Button>
+            <li key={m.id} className="flex flex-col gap-2">
+              {editing?.id === m.id ? (
+                <div className="flex flex-col gap-2">
+                  <Field label="Ad Soyad" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} maxLength={40} />
+                  <Field label="E-posta (isteğe bağlı)" type="email" value={editing.email} onChange={(e) => setEditing({ ...editing, email: e.target.value })} maxLength={100} />
+                  <div className="flex gap-2">
+                    <Button className="flex-1" disabled={busy || !editing.name.trim()} onClick={() => void act(saveMember, 'Bilgiler kaydedildi.')}>Kaydet</Button>
+                    <Button variant="secondary" className="flex-1" disabled={busy} onClick={() => setEditing(null)}>Vazgeç</Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0">
+                    <span className="block truncate">{m.name}</span>
+                    <span className="block truncate text-xs text-muted">{m.email ? `${m.email} · ` : ''}{m.role === 'owner' ? 'sahip' : 'üye'} · {m.passkeys} cihaz</span>
+                  </span>
+                  <span className="flex shrink-0 gap-1">
+                    {(isOwner || m.id === user?.id) && (
+                      <Button variant="secondary" className="min-h-11" disabled={busy} onClick={() => setEditing({ id: m.id, name: m.name, email: m.email ?? '' })}>Düzenle</Button>
+                    )}
+                    {isOwner && m.role !== 'owner' && (
+                      <Button variant="danger" className="min-h-11" disabled={busy} onClick={() => void confirm({ title: `${m.name} çıkarılsın mı?`, message: 'Kişinin tüm cihazları silinir ve oturumu kapanır. Eklediği kayıtlar kalır. Yeniden davet edilebilir.', confirmLabel: 'Çıkar', destructive: true }).then((ok) => { if (ok) void act(() => api(`/auth/members/${m.id}`, { method: 'DELETE' }), 'Kişi çıkarıldı.') })}>
+                        Çıkar
+                      </Button>
+                    )}
+                  </span>
+                </div>
               )}
             </li>
           ))}
         </ul>
         {isOwner && (
           <div className="flex flex-col gap-2 border-t border-line pt-3">
-            <Field label="Yeni kişi davet et" value={inviteName} onChange={(e) => setInviteName(e.target.value)} placeholder="Kişinin adı" maxLength={40} />
+            <Field label="Yeni kişi davet et" value={inviteName} onChange={(e) => setInviteName(e.target.value)} placeholder="Ad Soyad" maxLength={40} />
+            <Field label="E-posta (isteğe bağlı)" type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="ornek@eposta.com" maxLength={100} />
             <Button variant="secondary" disabled={busy || !inviteName.trim()} onClick={() => void act(createInvite)}>Davet bağlantısı oluştur</Button>
             {inviteLink && (
               <div className="flex flex-col gap-2">

@@ -22,6 +22,7 @@ export interface PasskeyInfo {
 export interface MemberInfo {
   id: string
   name: string
+  email: string | null
   role: 'owner' | 'member'
   created_at: number
   passkeys: number
