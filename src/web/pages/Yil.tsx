@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { YearMonthDto } from '../../shared/api'
 import { errorMessage } from '../api'
 import { YearPickerTitle } from '../pickers'
@@ -10,14 +10,44 @@ import { BottomNav, Notice, Page, PageHeader, SectionLabel } from '../ui'
 const whole = (kurus: number) => `${kurus < 0 ? '−' : '+'}${Math.abs(Math.round(kurus / 100)).toLocaleString('tr-TR')}`
 const plain = (kurus: number) => Math.round(kurus / 100).toLocaleString('tr-TR')
 
-const CHART = { w: 330, h: 170, left: 34, bottom: 24, top: 10, bar: 9 }
+const CHART = { h: 220, left: 58, bottom: 24, top: 10 }
+
+/** 1, 2, 2,5, 5 × 10ⁿ biçiminde, en çok `count` aralığa bölen yuvarlak adım (TL). */
+function niceStep(max: number, count: number) {
+  const raw = max / count
+  const pow = 10 ** Math.floor(Math.log10(raw))
+  return ([1, 2, 2.5, 5, 10].find((m) => m * pow >= raw) ?? 10) * pow
+}
+
+/** Kapsayıcının genişliğini piksel olarak izler; grafik bu genişlikte çizilir, ekranla büyümez. */
+function useWidth() {
+  const ref = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(0)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    setWidth(el.clientWidth)
+    const observer = new ResizeObserver(() => setWidth(el.clientWidth))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  return [ref, width] as const
+}
 
 /** Aylık gelir/gider: gruplu çubuk grafik ve altında tablo. Kapanmamış (gelecek) dönemler soluktur. */
 function MonthlyIncomeExpense({ months, totals, thisPeriod }: { months: YearMonthDto[]; totals: { income: number; expense: number; net: number }; thisPeriod: string }) {
-  const top = Math.max(1, ...months.flatMap((m) => [m.income, m.expense]))
+  const [ref, width] = useWidth()
+  const [active, setActive] = useState<number | null>(null)
+  const maxTl = Math.max(1, ...months.flatMap((m) => [m.income, m.expense])) / 100
+  const stepTl = niceStep(maxTl, 4)
+  const ticks = Array.from({ length: Math.ceil(maxTl / stepTl) + 1 }, (_, i) => i * stepTl)
+  const top = ticks[ticks.length - 1]!
   const plotH = CHART.h - CHART.top - CHART.bottom
-  const step = (CHART.w - CHART.left) / Math.max(1, months.length)
-  const y = (v: number) => CHART.top + plotH * (1 - v / top)
+  const plotW = Math.max(0, width - CHART.left)
+  const step = plotW / Math.max(1, months.length)
+  const bar = Math.max(4, Math.min(18, step * 0.32))
+  const y = (tl: number) => CHART.top + plotH * (1 - tl / top)
+  const hovered = active === null ? null : months[active]
   return (
     <>
       <SectionLabel>Aylık gelir / gider</SectionLabel>
@@ -26,24 +56,45 @@ function MonthlyIncomeExpense({ months, totals, thisPeriod }: { months: YearMont
           <span className="flex items-center gap-1"><i className="size-2.5 rounded-xs bg-good" />Gelir</span>
           <span className="flex items-center gap-1"><i className="size-2.5 rounded-xs bg-bar-bad" />Gider</span>
         </div>
-        <svg viewBox={`0 0 ${CHART.w} ${CHART.h}`} width="100%" role="img" aria-label="Aylık gelir ve gider çubuk grafiği">
-          {[0, 0.5, 1].map((f) => (
-            <g key={f}>
-              <line x1={CHART.left} x2={CHART.w} y1={y(top * f)} y2={y(top * f)} className="stroke-line" />
-              <text x={0} y={y(top * f) + 3} className="fill-muted text-[10px]">{plain(top * f)}</text>
-            </g>
-          ))}
-          {months.map((m, i) => {
-            const x = CHART.left + i * step + step / 2
-            return (
-              <g key={m.month} opacity={m.month > thisPeriod ? 0.55 : 1}>
-                <rect x={x - CHART.bar - 1} y={y(m.income)} width={CHART.bar} height={CHART.top + plotH - y(m.income)} rx={2} className="fill-good" />
-                <rect x={x + 1} y={y(m.expense)} width={CHART.bar} height={CHART.top + plotH - y(m.expense)} rx={2} className="fill-bar-bad" />
-                <text x={x} y={CHART.h - 8} textAnchor="middle" className="fill-muted text-[10px]">{monthName(m.month).slice(0, 3)}</text>
-              </g>
-            )
-          })}
-        </svg>
+        <div ref={ref} className="relative" style={{ height: CHART.h }} onPointerLeave={() => setActive(null)}>
+          {width > 0 && (
+            <svg width={width} height={CHART.h} role="img" aria-label="Aylık gelir ve gider çubuk grafiği">
+              {ticks.map((t) => (
+                <g key={t}>
+                  <line x1={CHART.left} x2={width} y1={y(t)} y2={y(t)} className="stroke-line" />
+                  <text x={CHART.left - 8} y={y(t) + 4} textAnchor="end" className="fill-muted text-[11px]">{Math.round(t).toLocaleString('tr-TR')}</text>
+                </g>
+              ))}
+              {months.map((m, i) => {
+                const cx = CHART.left + i * step + step / 2
+                const inc = y(m.income / 100)
+                const exp = y(m.expense / 100)
+                return (
+                  <g key={m.month} opacity={m.month > thisPeriod ? 0.55 : 1}>
+                    {active === i && <rect x={CHART.left + i * step} y={CHART.top} width={step} height={plotH} className="fill-chip" />}
+                    <rect x={cx - bar - 1} y={inc} width={bar} height={CHART.top + plotH - inc} rx={2} className="fill-good" />
+                    <rect x={cx + 1} y={exp} width={bar} height={CHART.top + plotH - exp} rx={2} className="fill-bar-bad" />
+                    <text x={cx} y={CHART.h - 7} textAnchor="middle" className="fill-muted text-[11px]">{monthName(m.month).slice(0, 3)}</text>
+                    <rect x={CHART.left + i * step} y={0} width={step} height={CHART.h} fill="transparent" onPointerEnter={() => setActive(i)} onPointerDown={() => setActive(i)}>
+                      <title>{`${monthName(m.month)}: gelir ${plain(m.income)}, gider ${plain(m.expense)}, net ${whole(m.net)}`}</title>
+                    </rect>
+                  </g>
+                )
+              })}
+            </svg>
+          )}
+          {hovered && (
+            <div
+              className="pointer-events-none absolute z-10 flex flex-col gap-0.5 rounded-xl bg-ink px-3 py-2 text-xs text-on-ink shadow-lg"
+              style={{ top: 4, left: Math.min(Math.max(CHART.left + (active ?? 0) * step + step / 2, 70), Math.max(70, width - 70)), transform: 'translateX(-50%)' }}
+            >
+              <span className="font-semibold">{monthName(hovered.month)}</span>
+              <span>Gelir {plain(hovered.income)}</span>
+              <span>Gider {plain(hovered.expense)}</span>
+              <span className="font-semibold">Net {whole(hovered.net)}</span>
+            </div>
+          )}
+        </div>
         <table className="w-full text-right text-[13px] tabular-nums">
           <thead>
             <tr className="text-xs text-muted">
