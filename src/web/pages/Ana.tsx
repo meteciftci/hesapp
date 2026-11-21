@@ -113,13 +113,13 @@ function AyEkrani({ month, onMonth }: { month: string; onMonth: (m: string) => v
                 <div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <p className="text-[13px] text-white/75">{closed ? 'Elde kalan' : 'Ay sonunda elde kalan'}{data.opening.provisional ? ' · devir geçici' : ''}</p>
-                      <p className="text-xl leading-tight font-semibold tracking-tight">{signed(data.totals.expectedClosing)}</p>
+                      <p className="text-[13px] text-white/75">{closed ? 'Elde kalan' : 'Tahmini bakiye'}{data.opening.provisional ? ' · devir geçici' : ''}</p>
+                      <p className="text-xl text-[#f5d27a] leading-tight font-semibold tracking-tight">{signed(data.totals.expectedClosing)}</p>
                     </div>
                     {!closed && (
                       <div>
-                        <p className="text-[13px] text-white/75">Şu an bankada olması gereken</p>
-                        <p className="text-xl leading-tight font-semibold tracking-tight">{signed(data.totals.currentBalance)}</p>
+                        <p className="text-[13px] text-white/75">Güncel bakiye</p>
+                        <p className="text-xl text-[#8fd3b4] leading-tight font-semibold tracking-tight">{signed(data.totals.currentBalance)}</p>
                       </div>
                     )}
                   </div>
